@@ -1,3 +1,61 @@
+-- Old PDR attempt
+
+init :: System -> Frame
+init = undefined
+
+-- Returns true if property holds, false otherwise
+
+
+pdr :: System -> IO Bool
+
+
+pdr s = 
+  if ((find (/= 0) ints) == (Just 1))
+  then (return True)
+  else (return False)
+  where
+    (frames, ints) = unzip $ iterate ((doOneIteration s) . fst) ([PDR.init s],0)
+
+doOneIteration :: System -> [Frame] -> ([Frame],Int)
+doOneIteration = undefined
+
+doOneIteration' :: System -> [Frame] -> IO ([Frame],Int)
+doOneIteration' s fs = do
+ s2 <- getLine
+ return ([],length s2)
+
+pdr' :: System -> IO Bool
+pdr' s = do
+     ress <- iterateMListWhile ((== 0) . snd) ((doOneIteration' s) . fst) ([PDR.init s],0)
+     let (frames, ints) = unzip ress
+     return ((last ints) == 1)
+
+
+
+iterateMListWhile :: Monad m => (a -> Bool) -> (a -> m a) -> a -> m [a]
+iterateMListWhile cond f start = if (not $ cond start)
+                                 then return [start]
+                                 else do
+ next <- f start
+ rest <- iterateMListWhile cond f next
+ return (start:rest)
+
+
+buildString :: String -> IO String
+buildString s = do
+ s2 <- getLine
+ return (s++s2)
+ 
+test :: IO [String]
+test = do
+  strings <- iterateMListWhile (\s -> length s < 5) buildString ""
+  return $ take 2 strings
+
+
+
+
+-- Z3 experimentation
+
 script :: Z3 (Result, Maybe [Bool])
 script = do
   l1 <- mkFreshBoolVar "l1"
