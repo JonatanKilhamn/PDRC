@@ -7,7 +7,7 @@ import Data.List
 import qualified Data.Traversable as T
 import qualified Data.Map as M
 import ControlMonadLoops
-
+import Control.Monad.State.Lazy
 
 import Z3.Monad
 
@@ -134,7 +134,7 @@ generalise1 a = undefined
 generalise2 :: Assignment -> Z3 Assignment
 generalise2 a = undefined
 
-type TimedCube = TimedCube
+type TimedCube = (Assignment, Int)
 type PriorityQueue = [TimedCube] -- maybe placeholder?
 
 -- TODO: change prioQ implementation to actual queue
@@ -155,6 +155,7 @@ data SMTContext
   }
 
 
+
 -- TODO: actually use this!
 emptySmtContext :: SMTContext
 emptySmtContext = C { astMap = M.fromList []
@@ -162,6 +163,13 @@ emptySmtContext = C { astMap = M.fromList []
                     , prioQueue = []
                     , z3Env = return ()
                     }
+
+doZ3 :: (Z3 a) -> State SMTContext ()
+doZ3 z = state $ \c -> ((), c {z3Env = z3Env'})
+ where z3Env' = do
+        z
+        return ()
+
 
 
 
