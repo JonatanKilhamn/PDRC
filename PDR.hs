@@ -11,84 +11,86 @@ import Control.Monad.State.Lazy
 
 import Z3.Monad
 
+import System
 ----------------
 
 -- Placeholders! TODO: fix them
-type System = Int
 type Frame = [Clause]
 
 data Clause = Clause [AST]
 data Cube = Cube [AST]
 
 
+type PDRZ3 = StateT SMTContext Z3
+
+-- runStateT :: StateT s a -> s -> m (a, s)
+
 runPdr :: System -> IO Bool
 runPdr s = do
-  res <- evalZ3 $ pdr s
+  (res, finalState) <- evalZ3 $ runStateT (pdr s) (emptyContext)
   return res
 
-pdr :: System -> Z3 Bool
+pdr :: System -> PDRZ3 Bool
 pdr s = do
-  c <- initialSmtContext s
-  outerPdrLoop s c 0
+  putInitialSmtContext s
+  outerPdrLoop s
       
 
 -- Input: n::Int is iteration, which also corresponds to the highest frame index
-outerPdrLoop :: System -> SMTContext -> Int -> Z3 Bool
-outerPdrLoop s c n = do
-  failed <- blockAllBadStatesInLastFrame c n
+outerPdrLoop :: System -> PDRZ3 Bool
+outerPdrLoop s = do
+  failed <- blockAllBadStatesInLastFrame
   if failed
   then return False
   else do
-  c <- addNewFrame c
+  addNewFrame
   success <- forwardPropagation
   if success
   then return True
   else do
-  outerPdrLoop s c (n+1)
+  outerPdrLoop s
 
 
 -- TODO: add statefulness
 -- Input: k::Int, the current iteration
 -- Returns: false if property is disproved, true if all states could be blocked
-blockAllBadStatesInLastFrame :: SMTContext -> Int -> Z3 Bool
-blockAllBadStatesInLastFrame c k = do
+blockAllBadStatesInLastFrame :: PDRZ3 Bool
+blockAllBadStatesInLastFrame = do
   let setup = undefined -- some setup surely needed
-  (res, maybeAssignment) <- unsafeStateQuery c
+  k <- getMaxFrameIndex
+  (res, maybeAssignment) <- unsafeStateQuery
   if (res == Unsat)
   then return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
   let queue = priorityQueue (assignment,k)
-  failed <- blockEntireQueue c queue
+  failed <- blockEntireQueue queue
   if failed
   then return False
   else do
-  blockAllBadStatesInLastFrame c k
-  -- this hinges on some statefulness carrying over in the Z3 monad,
-  -- specifically the frames. Right now it doesn't, so either I'll
-  -- have to augment the Z3 monad, or pass around a Context object
-  -- which will then be updated before the recursive call.
+  blockAllBadStatesInLastFrame
   
 
-blockEntireQueue :: SMTContext -> PriorityQueue -> Z3 Bool
-blockEntireQueue c queue = do
+blockEntireQueue :: PriorityQueue -> PDRZ3 Bool
+blockEntireQueue queue = do
   if ((length queue) == 0)
   then return True
   else do
   let ((t,k),queue') = popMin queue
-  (failed, queue'') <- blockBadState c (t,k) queue'
+  (failed, queue'') <- blockBadState (t,k) queue'
   if failed
   then return False
   else do
-  blockEntireQueue c queue''
+  blockEntireQueue queue''
 
 
-blockBadState :: SMTContext -> TimedCube -> PriorityQueue -> Z3 (Bool, PriorityQueue)
-blockBadState c (s,k) queue = do
+blockBadState :: TimedCube -> PriorityQueue -> PDRZ3 (Bool, PriorityQueue)
+blockBadState (s,k) queue =
   if k == 0
   then return (False, queue)
   else do
-  (res, maybeAssignment) <- consecutionQuery c (s,k)
+  c <- get
+  (res, maybeAssignment) <- consecutionQuery (s,k)
   queue' <-
    if (res == Sat)
    then do
@@ -97,15 +99,19 @@ blockBadState c (s,k) queue = do
     return newQueue
    else do
     updateFrames s k
-    n <- getMaxFrameIndex c
+    c <- get
+    n <- getMaxFrameIndex
     let newQueue = if (k < n) then (queue++[(s,k+1)]) else queue
     return newQueue
   return (True, queue')
 
 
 
-addNewFrame :: SMTContext -> Z3 (SMTContext)
-addNewFrame c = return (c {frames = (frames c)++[emptyFrame]})
+addNewFrame :: PDRZ3 ()
+addNewFrame = do
+  c <- get
+  put $ c {frames = (frames c)++[emptyFrame]}
+  return ()
 
 -- TODO placeholder
 emptyFrame :: Frame
@@ -117,72 +123,74 @@ emptyFrame = []
 -- * Do we keep all clauses in all frames, or just in the last one where
 --   they appear?
 -- Needs to either augment the monad, or add return type other than ()
-updateFrames :: Assignment -> Int -> Z3 ()
+updateFrames :: Assignment -> Int -> PDRZ3 ()
 updateFrames s k = undefined
 
 
-getMaxFrameIndex :: SMTContext -> Z3 Int
-getMaxFrameIndex c = return $ length $ frames c
+getMaxFrameIndex :: PDRZ3 Int
+getMaxFrameIndex = get >>= (return . length . frames)
 
 -- TODO
-forwardPropagation :: Z3 Bool
+forwardPropagation :: PDRZ3 Bool
 forwardPropagation = return True
 
 -- TODO
 type Assignment = [Bool] -- placeholder
 
 
-unsafeStateQuery :: SMTContext -> Z3 (Result, Maybe Assignment)
-unsafeStateQuery c = do
+unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
+unsafeStateQuery = do
+  c <- get
   let p = prop c
       n = length $ frames c
-  push
-  np <- mkNot p
-  assert np
+  lift push
+  np <- lift $ mkNot p
+  lift $ assert np
   f_n <- mkFrame $ last $ frames c
-  assert f_n
-  assVars <- getVars c n
-  res <- withModel $ \m ->
+  lift $ assert f_n
+  assVars <- getVars n
+  res <- lift $ withModel $ \m ->
     catMaybes <$> mapM (evalBool m) assVars
-  pop 1
+  lift $ pop 1
   return res
   
 
-mkFrame :: Frame -> Z3 AST
+mkFrame :: Frame -> PDRZ3 AST
 mkFrame fr = do
   clauses <- mapM mkClause fr
-  mkAnd clauses
+  lift $ mkAnd clauses
 
-mkClause :: Clause -> Z3 AST
-mkClause (Clause asts) = mkOr asts
+mkClause :: Clause -> PDRZ3 AST
+mkClause (Clause asts) = lift $ mkOr asts
 
 -- TODO
-consecutionQuery :: SMTContext -> TimedCube -> Z3 (Result, Maybe Assignment)
-consecutionQuery c (ass,k) = do
+consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
+consecutionQuery (ass,k) = do
+  c <- get
   let p = prop c
-  push
-  s <- mkTimedCube c (ass,k-1)
-  assert s
-  s' <- mkTimedCube c (ass,k)
-  assert =<< mkNot s'
-  t <- mkTransRelation c (k-1)
+  lift push
+  s <- mkTimedCube (ass,k-1)
+  lift $ assert s
+  s' <- mkTimedCube (ass,k)
+  lift $ assert =<< mkNot s'
+  t <- mkTransRelation (k-1)
   f_kminus1 <- mkFrame $ (frames c)!!(k-1)
-  assert f_kminus1
+  lift $ assert f_kminus1
   
-  assVars <- getVars c (k-1)
-  res <- withModel $ \m ->
+  assVars <- getVars (k-1)
+  res <- lift $ withModel $ \m ->
     catMaybes <$> mapM (evalBool m) assVars
-  pop 1
+  lift $ pop 1
   return res
 
 -- TODO
-generalise1 :: Assignment -> Z3 Assignment
+generalise1 :: Assignment -> PDRZ3 Assignment
 generalise1 a = undefined
 
-generalise2 :: Assignment -> Z3 Assignment
+generalise2 :: Assignment -> PDRZ3 Assignment
 generalise2 a = undefined
 
-type TimedCube = (Assignment, Int)
+type TimedCube = Timed Assignment
 
 type PriorityQueue = [TimedCube] -- maybe placeholder?
 
@@ -194,50 +202,76 @@ priorityQueue elem = [elem]
 popMin :: PriorityQueue -> (TimedCube, PriorityQueue)
 popMin q = (head q, tail q)
 
+type Timed a = (a,Int)
+
+
+
 
 data SMTContext
   = C
-  { astMap :: M.Map String AST
+  { system :: System
+  , predMap :: M.Map (Timed Predicate) AST
+  , intExpMap :: M.Map (Timed IntExpr) AST
+  , litMap :: M.Map (Timed Literal) AST
+  , varMap :: M.Map (Timed Variable) AST
   , frames :: [Frame]
   , prioQueue :: PriorityQueue
   , prop :: AST
   }
 
 
+emptyContext :: SMTContext
+emptyContext = C { system = undefined
+                 , predMap = M.empty
+                 , intExpMap = M.empty
+                 , litMap = M.empty
+                 , varMap = M.empty
+                 , frames = []
+                 , prioQueue = []
+                 , prop = undefined
+                 }
+
 -- TODO: actually use this!
-initialSmtContext :: System -> Z3 SMTContext
-initialSmtContext s = do
+putInitialSmtContext :: System -> PDRZ3 ()
+putInitialSmtContext s = do
   p <- getProp s
-  return $ C { astMap = M.fromList []
-             , frames = []
-             , prioQueue = []
-             , prop = p
-             }
+  c <- get
+  put $ c {system = s, prop = p} 
+  return ()
+
 
 -- TODO
-getProp :: System -> Z3 AST
-getProp = undefined
+getProp :: System -> PDRZ3 AST
+getProp s = mkPredicate (safetyProp s)
+
+mkPredicate :: Predicate -> PDRZ3 AST
+mkPredicate (P lit) = mkLiteral lit
+mkPredicate (PNot p) = do
+  p_ast <- mkPredicate p
+  not_p_ast <- lift $ mkNot p_ast
+  return not_p_ast
+{-mkPredicate c (PAnd ps) = do
+  (c2,p_ast) <- mkPredicate c p
+  not_p_ast <- mkNot p_ast
+  return (c2, not_p_ast)
+-}
+
+-- TODO
+mkLiteral :: Literal -> PDRZ3 AST
+mkLiteral = undefined
 
 -- "i" is the frame
 -- TODO
-getVars :: SMTContext -> Int -> Z3 [AST]
-getVars c i = undefined
+getVars :: Int -> PDRZ3 [AST]
+getVars i = undefined
 
 -- TODO
-mkTimedCube :: SMTContext -> TimedCube -> Z3 AST
+mkTimedCube :: TimedCube -> PDRZ3 AST
 mkTimedCube tc = undefined
 
 -- "i" is the frame index of the next-state variables
 -- TODO
-mkTransRelation :: SMTContext -> Int -> Z3 AST
-mkTransRelation c i = undefined
-
-{--doZ3 :: (Z3 a) -> State SMTContext ()
-doZ3 z = state $ \c -> ((), c {z3Env = z3Env'})
- where z3Env' = do
-        z
-        return ()
---}
-
+mkTransRelation :: Int -> PDRZ3 AST
+mkTransRelation i = undefined
 
 
