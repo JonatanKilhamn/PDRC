@@ -8,19 +8,21 @@ data Variable = Var VariableName | Next Variable
  deriving (Eq, Show, Ord)
 
 data Literal = BLit Variable | ILit BinaryPred (IntExpr) (IntExpr)
+ deriving (Eq, Show, Ord)
 
 data Predicate
   = P Literal
   | PNot (Predicate)
   | PAnd [Predicate]
   | POr [Predicate]
+   deriving ( Eq, Show, Ord )
 
 data IntExpr
  = IntConst Int
  | Plus (IntExpr) (IntExpr)
  | Minus (IntExpr) (IntExpr)
  | IntVar Variable
-  deriving ( Eq, Show )
+  deriving ( Eq, Show, Ord)
 
 data BinaryPred
  = Equals
@@ -29,7 +31,7 @@ data BinaryPred
  | LessThanEq
  | GreaterThan
  | GreaterThanEq
-  deriving ( Eq )
+  deriving ( Eq, Ord )
 
 instance Show BinaryPred where
  show Equals = "=="
@@ -50,6 +52,11 @@ data System
       , init :: Predicate
       , safetyProp :: Predicate
       }
+
+
+getAllVars :: System -> [Variable]
+getAllVars s = undefined --map Var $ (boolVars s) ++ (intVars s)
+
 
 data TransitionRelation
   = TR { guard :: Predicate

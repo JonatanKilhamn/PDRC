@@ -14,16 +14,11 @@ import Z3.Monad
 import System
 ----------------
 
--- Placeholders! TODO: fix them
-type Frame = [Clause]
-
-data Clause = Clause [AST]
-data Cube = Cube [AST]
-
 
 type PDRZ3 = StateT SMTContext Z3
 
--- runStateT :: StateT s a -> s -> m (a, s)
+z = lift
+
 
 runPdr :: System -> IO Bool
 runPdr s = do
@@ -51,7 +46,6 @@ outerPdrLoop s = do
   outerPdrLoop s
 
 
--- TODO: add statefulness
 -- Input: k::Int, the current iteration
 -- Returns: false if property is disproved, true if all states could be blocked
 blockAllBadStatesInLastFrame :: PDRZ3 Bool
@@ -63,47 +57,44 @@ blockAllBadStatesInLastFrame = do
   then return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
-  let queue = priorityQueue (assignment,k)
-  failed <- blockEntireQueue queue
+  putQueue $ priorityQueue (assignment,k)
+  failed <- blockEntireQueue
   if failed
   then return False
   else do
   blockAllBadStatesInLastFrame
   
 
-blockEntireQueue :: PriorityQueue -> PDRZ3 Bool
-blockEntireQueue queue = do
+blockEntireQueue :: PDRZ3 Bool
+blockEntireQueue = do
+  queue <- fmap prioQueue get
   if ((length queue) == 0)
   then return True
   else do
-  let ((t,k),queue') = popMin queue
-  (failed, queue'') <- blockBadState (t,k) queue'
+  t <- popMin
+  failed <- blockBadState t
   if failed
   then return False
   else do
-  blockEntireQueue queue''
+  blockEntireQueue
 
 
-blockBadState :: TimedCube -> PriorityQueue -> PDRZ3 (Bool, PriorityQueue)
-blockBadState (s,k) queue =
+blockBadState :: TimedCube -> PDRZ3 Bool
+blockBadState (s,k) =
   if k == 0
-  then return (False, queue)
+  then return False
   else do
-  c <- get
+  queue <- fmap prioQueue get
   (res, maybeAssignment) <- consecutionQuery (s,k)
-  queue' <-
-   if (res == Sat)
-   then do
+  if (res == Sat)
+  then do
     m <- generalise2 (fromJust maybeAssignment)
-    let newQueue = (m, k-1):(queue ++ [(s,k)])
-    return newQueue
-   else do
+    putQueue $ (m, k-1):(queue ++ [(s,k)])
+  else do
     updateFrames s k
-    c <- get
     n <- getMaxFrameIndex
-    let newQueue = if (k < n) then (queue++[(s,k+1)]) else queue
-    return newQueue
-  return (True, queue')
+    putQueue $ if (k < n) then (queue++[(s,k+1)]) else queue
+  return True
 
 
 
@@ -113,9 +104,11 @@ addNewFrame = do
   put $ c {frames = (frames c)++[emptyFrame]}
   return ()
 
--- TODO placeholder
 emptyFrame :: Frame
-emptyFrame = []
+emptyFrame = ([], Nothing)
+
+getMaxFrameIndex :: PDRZ3 Int
+getMaxFrameIndex = get >>= (return . length . frames)
 
 -- TODO:
 -- * Should update all frames with i≤k
@@ -127,15 +120,12 @@ updateFrames :: Assignment -> Int -> PDRZ3 ()
 updateFrames s k = undefined
 
 
-getMaxFrameIndex :: PDRZ3 Int
-getMaxFrameIndex = get >>= (return . length . frames)
-
 -- TODO
 forwardPropagation :: PDRZ3 Bool
 forwardPropagation = return True
 
--- TODO
-type Assignment = [Bool] -- placeholder
+-- TODO: this type does not infer all known properties of assignments. Problem?
+type Assignment = [Literal] -- placeholder
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -143,49 +133,42 @@ unsafeStateQuery = do
   c <- get
   let p = prop c
       n = length $ frames c
-  lift push
-  np <- lift $ mkNot p
-  lift $ assert np
-  f_n <- mkFrame $ last $ frames c
-  lift $ assert f_n
-  assVars <- getVars n
+  z push
+  z $ mkNot p >>= assert
+  f_n <- mkFrame n
+  z $ assert f_n
+  assVars <- getVars
   res <- lift $ withModel $ \m ->
     catMaybes <$> mapM (evalBool m) assVars
-  lift $ pop 1
-  return res
+  z $ pop 1
+  return undefined --TODO
   
 
-mkFrame :: Frame -> PDRZ3 AST
-mkFrame fr = do
-  clauses <- mapM mkClause fr
-  lift $ mkAnd clauses
 
-mkClause :: Clause -> PDRZ3 AST
-mkClause (Clause asts) = lift $ mkOr asts
 
--- TODO
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
 consecutionQuery (ass,k) = do
   c <- get
   let p = prop c
-  lift push
+  z push
   s <- mkTimedCube (ass,k-1)
-  lift $ assert s
+  z $ assert s
   s' <- mkTimedCube (ass,k)
-  lift $ assert =<< mkNot s'
+  z $ assert =<< mkNot s'
   t <- mkTransRelation (k-1)
-  f_kminus1 <- mkFrame $ (frames c)!!(k-1)
-  lift $ assert f_kminus1
-  
-  assVars <- getVars (k-1)
-  res <- lift $ withModel $ \m ->
+  f_kminus1 <- mkFrame (k-1)
+  z $ assert f_kminus1
+  assVars <- getVars
+  res <- z $ withModel $ \m ->
     catMaybes <$> mapM (evalBool m) assVars
-  lift $ pop 1
-  return res
+  z $ pop 1
+  return undefined --TODO
 
--- TODO
+
+
 generalise1 :: Assignment -> PDRZ3 Assignment
-generalise1 a = undefined
+generalise1 a = do undefined
+  
 
 generalise2 :: Assignment -> PDRZ3 Assignment
 generalise2 a = undefined
@@ -199,21 +182,31 @@ priorityQueue :: TimedCube -> PriorityQueue
 priorityQueue elem = [elem]
 
 -- TODO: actual popMin / change prioQ implementation
-popMin :: PriorityQueue -> (TimedCube, PriorityQueue)
-popMin q = (head q, tail q)
+popMin :: PDRZ3 TimedCube
+popMin = do
+  c <- get
+  let q = prioQueue c
+      tc = head q
+      q' = tail q
+  putQueue q'
+  return tc
+
+
 
 type Timed a = (a,Int)
 
+-- Placeholders! TODO: fix them
+type Frame = ([Predicate], Maybe AST)
 
 
 
 data SMTContext
   = C
   { system :: System
-  , predMap :: M.Map (Timed Predicate) AST
-  , intExpMap :: M.Map (Timed IntExpr) AST
-  , litMap :: M.Map (Timed Literal) AST
-  , varMap :: M.Map (Timed Variable) AST
+  , predMap :: M.Map (Predicate) AST
+  , intExprMap :: M.Map (IntExpr) AST
+  , litMap :: M.Map (Literal) AST
+  , varMap :: M.Map (Variable) AST
   , frames :: [Frame]
   , prioQueue :: PriorityQueue
   , prop :: AST
@@ -223,7 +216,7 @@ data SMTContext
 emptyContext :: SMTContext
 emptyContext = C { system = undefined
                  , predMap = M.empty
-                 , intExpMap = M.empty
+                 , intExprMap = M.empty
                  , litMap = M.empty
                  , varMap = M.empty
                  , frames = []
@@ -231,7 +224,6 @@ emptyContext = C { system = undefined
                  , prop = undefined
                  }
 
--- TODO: actually use this!
 putInitialSmtContext :: System -> PDRZ3 ()
 putInitialSmtContext s = do
   p <- getProp s
@@ -240,30 +232,142 @@ putInitialSmtContext s = do
   return ()
 
 
--- TODO
+putQueue :: PriorityQueue -> PDRZ3 ()
+putQueue q = do
+  c <- get
+  put c {prioQueue = q}
+
 getProp :: System -> PDRZ3 AST
 getProp s = mkPredicate (safetyProp s)
 
-mkPredicate :: Predicate -> PDRZ3 AST
-mkPredicate (P lit) = mkLiteral lit
-mkPredicate (PNot p) = do
-  p_ast <- mkPredicate p
-  not_p_ast <- lift $ mkNot p_ast
-  return not_p_ast
-{-mkPredicate c (PAnd ps) = do
-  (c2,p_ast) <- mkPredicate c p
-  not_p_ast <- mkNot p_ast
-  return (c2, not_p_ast)
--}
 
--- TODO
+------
+
+
+-- Int is the frame index
+mkFrame :: Int -> PDRZ3 AST
+mkFrame k = do
+  c <- get
+  let (ps,maybe_ast) = (frames c)!!k
+  case maybe_ast of
+    (Just ast) -> return ast
+    (Nothing) -> do
+      ast <- mkPredicate (PAnd ps)
+      let frames' = replaceAtIndex k (ps,Just ast) (frames c)
+      put $ c {frames = frames'}
+      return ast
+
+replaceAtIndex :: Int -> a -> [a] -> [a]
+replaceAtIndex n item ls = a ++ (item:b) where (a, (_:b)) = splitAt n ls
+
+
+
+
+mkPredicate :: Predicate -> PDRZ3 AST
+mkPredicate p = do
+  ast <- mkPredicate' p
+  c <- get
+  let pm = predMap c
+  let pm' = M.insert p ast pm
+  put c {predMap = pm'}
+  return ast
+
+mkPredicate' :: Predicate -> PDRZ3 AST
+mkPredicate' (P lit) = mkLiteral lit
+mkPredicate' (PNot p) = do
+  ast <- mkPredicate p
+  z $ mkNot ast
+mkPredicate' (PAnd ps) = do
+  asts <- mapM mkPredicate ps
+  z $ mkAnd asts
+mkPredicate' (POr ps) = do
+  asts <- mapM mkPredicate ps
+  z $ mkOr asts
+
 mkLiteral :: Literal -> PDRZ3 AST
-mkLiteral = undefined
+mkLiteral l = do
+  lm <- fmap litMap get
+  let maybeAst = M.lookup l lm
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> mkLiteral' l
+
+mkLiteral' :: Literal -> PDRZ3 AST
+mkLiteral' l = do
+  ast <- mkLiteral'' l
+  c <- get
+  let lm = litMap c
+  let lm' = M.insert l ast lm
+  put c {litMap = lm'}
+  return ast
+
+mkLiteral'' :: Literal -> PDRZ3 AST
+mkLiteral'' (BLit v) = mkVariable v
+mkLiteral'' (ILit bp e1 e2) = do
+ ast1 <- mkIntExpr e1
+ ast2 <- mkIntExpr e2
+ z $ (zfunction bp) ast1 ast2
+  where zfunction Equals = mkEq
+        zfunction NEquals = curry ((mkNot =<<) . (uncurry mkEq))
+        zfunction LessThan = mkLt
+        zfunction LessThanEq = mkLe
+        zfunction GreaterThan = mkGt
+        zfunction GreaterThanEq = mkGe
+
+mkIntExpr :: IntExpr -> PDRZ3 AST
+mkIntExpr ie = do
+  iem <- fmap intExprMap get
+  let maybeAst = M.lookup ie iem
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> mkIntExpr' ie
+       
+mkIntExpr' :: IntExpr -> PDRZ3 AST
+mkIntExpr' ie = do
+  ast <- mkIntExpr'' ie
+  c <- get
+  let iem = intExprMap c
+  let iem' = M.insert ie ast iem
+  put c {intExprMap = iem'}
+  return ast
+
+mkIntExpr'' :: IntExpr -> PDRZ3 AST
+mkIntExpr'' (IntConst n) = z $ mkIntNum n
+mkIntExpr'' (Plus ie1 ie2) = mkIntExprOp mkAdd [ie1, ie2]
+mkIntExpr'' (Minus ie1 ie2) = mkIntExprOp mkSub [ie1, ie2]
+mkIntExpr'' (IntVar v) = mkVariable v
+
+mkIntExprOp :: ([AST] -> Z3 AST) -> [IntExpr] -> PDRZ3 AST
+mkIntExprOp fun ies = do
+  asts <- mapM mkIntExpr ies
+  z $ fun asts
+
+mkVariable :: Variable -> PDRZ3 AST
+mkVariable v = do
+  vm <- fmap varMap get
+  let maybeAst = M.lookup v vm
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> mkVariable' v
+
+mkVariable' :: Variable -> PDRZ3 AST
+mkVariable' v = mkVar' v ""
+ where mkVar' (Var v) s = z $ mkFreshBoolVar (v++s)
+       mkVar' (Next v) s = mkVar' v (s++"'")
+
+
+
+
+
+
+--data Literal = BLit Variable | ILit BinaryPred (IntExpr) (IntExpr)
 
 -- "i" is the frame
 -- TODO
-getVars :: Int -> PDRZ3 [AST]
-getVars i = undefined
+getVars :: PDRZ3 [AST]
+getVars = do
+  c <- get
+  let vs = getAllVars (system c)
+  undefined
+
+
 
 -- TODO
 mkTimedCube :: TimedCube -> PDRZ3 AST
@@ -274,4 +378,23 @@ mkTimedCube tc = undefined
 mkTransRelation :: Int -> PDRZ3 AST
 mkTransRelation i = undefined
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+testz = do
+ v <- mkVariable (Next $ Var "foo")
+ z $ assert v
+ nv <- z $ mkNot v
+ --z $ assert nv
+ z check
 
