@@ -29,7 +29,7 @@ pdr :: System -> PDRZ3 Bool
 pdr s = do
   putInitialSmtContext s
   outerPdrLoop s
-      
+
 
 -- Input: n::Int is iteration, which also corresponds to the highest frame index
 outerPdrLoop :: System -> PDRZ3 Bool
@@ -63,7 +63,7 @@ blockAllBadStatesInLastFrame = do
   then return False
   else do
   blockAllBadStatesInLastFrame
-  
+
 
 blockEntireQueue :: PDRZ3 Bool
 blockEntireQueue = do
@@ -124,8 +124,10 @@ updateFrames s k = undefined
 forwardPropagation :: PDRZ3 Bool
 forwardPropagation = return True
 
--- TODO: this type does not infer all known properties of assignments. Problem?
-type Assignment = [Literal] -- placeholder
+data Assignment = A { bvs :: M.Map Variable Bool
+                    , ivs :: M.Map Variable Integer
+                    }
+
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -133,17 +135,33 @@ unsafeStateQuery = do
   c <- get
   let p = prop c
       n = length $ frames c
-  z push
-  z $ mkNot p >>= assert
   f_n <- mkFrame n
+  let (bvs, ivs) = getAllVars (system c)
+  bv_asts <- mapM mkVariable bvs
+  iv_asts <- mapM mkVariable ivs
+  z push
+  z $ assert =<< mkNot p
   z $ assert f_n
-  assVars <- getVars
-  res <- lift $ withModel $ \m ->
-    catMaybes <$> mapM (evalBool m) assVars
+  (res, maybeVals) <- lift $ withModel $ \m ->
+    evalBoolsAndInts m (bv_asts, iv_asts)
   z $ pop 1
-  return undefined --TODO
-  
+  let assignment = case maybeVals of (Nothing) -> Nothing
+                                     (Just (maybeBools, maybeInts)) -> Just $
+                                      A { bvs = maybeMap bvs maybeBools
+                                        , ivs = maybeMap ivs maybeInts }
+  return undefined --TODO: use "res"
 
+maybeMap :: Ord a => [a] -> [Maybe b] -> M.Map a b
+maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
+ where f x (Nothing) = Nothing
+       f x (Just y) = Just (x,y)
+
+
+evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
+evalBoolsAndInts m (as1,as2) = do
+  maybes1 <- mapM (evalBool m) as1
+  maybes2 <- mapM (evalInt m) as1
+  return (maybes1, maybes2)
 
 
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
@@ -158,9 +176,13 @@ consecutionQuery (ass,k) = do
   t <- mkTransRelation (k-1)
   f_kminus1 <- mkFrame (k-1)
   z $ assert f_kminus1
-  assVars <- getVars
-  res <- z $ withModel $ \m ->
-    catMaybes <$> mapM (evalBool m) assVars
+  let (bvs, ivs) = getAllVars (system c)
+      (bvs', ivs') = (map Next bvs, map Next ivs)
+      (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
+  bv_asts <- mapM mkVariable bvs''
+  iv_asts <- mapM mkVariable ivs''
+  res <- lift $ withModel $ \m ->
+    (evalBoolsAndInts m) (bv_asts, iv_asts)
   z $ pop 1
   return undefined --TODO
 
@@ -355,17 +377,6 @@ mkVariable' v = mkVar' v ""
 
 
 
-
-
---data Literal = BLit Variable | ILit BinaryPred (IntExpr) (IntExpr)
-
--- "i" is the frame
--- TODO
-getVars :: PDRZ3 [AST]
-getVars = do
-  c <- get
-  let vs = getAllVars (system c)
-  undefined
 
 
 

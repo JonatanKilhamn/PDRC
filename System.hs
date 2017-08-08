@@ -54,8 +54,10 @@ data System
       }
 
 
-getAllVars :: System -> [Variable]
-getAllVars s = undefined --map Var $ (boolVars s) ++ (intVars s)
+getAllVars :: System -> ([Variable],[Variable])
+getAllVars s = (map Var $ (Set.toList (boolVars s))
+               , map Var $ (Set.toList (intVars s))
+               )
 
 
 data TransitionRelation
