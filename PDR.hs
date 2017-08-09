@@ -18,7 +18,7 @@ import System
 type PDRZ3 = StateT SMTContext Z3
 
 z = lift
-
+zlocal = z . local
 
 runPdr :: System -> IO Bool
 runPdr s = do
@@ -128,6 +128,9 @@ data Assignment = A { bvs :: M.Map Variable Bool
                     , ivs :: M.Map Variable Integer
                     }
 
+removeVar :: Assignment -> Variable -> Assignment
+removeVar a v = a { bvs = M.delete v $ bvs a
+                  , ivs = M.delete v $ ivs a }
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -139,17 +142,16 @@ unsafeStateQuery = do
   let (bvs, ivs) = getAllVars (system c)
   bv_asts <- mapM mkVariable bvs
   iv_asts <- mapM mkVariable ivs
-  z push
-  z $ assert =<< mkNot p
-  z $ assert f_n
-  (res, maybeVals) <- lift $ withModel $ \m ->
-    evalBoolsAndInts m (bv_asts, iv_asts)
-  z $ pop 1
+  (res, maybeVals) <- zlocal $ do
+    assert =<< mkNot p
+    assert f_n
+    withModel $ \m ->
+      evalBoolsAndInts m (bv_asts, iv_asts)
   let assignment = case maybeVals of (Nothing) -> Nothing
                                      (Just (maybeBools, maybeInts)) -> Just $
                                       A { bvs = maybeMap bvs maybeBools
                                         , ivs = maybeMap ivs maybeInts }
-  return undefined --TODO: use "res"
+  return (res, assignment)
 
 maybeMap :: Ord a => [a] -> [Maybe b] -> M.Map a b
 maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
@@ -168,30 +170,70 @@ consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
 consecutionQuery (ass,k) = do
   c <- get
   let p = prop c
-  z push
   s <- mkTimedCube (ass,k-1)
-  z $ assert s
   s' <- mkTimedCube (ass,k)
-  z $ assert =<< mkNot s'
   t <- mkTransRelation (k-1)
   f_kminus1 <- mkFrame (k-1)
-  z $ assert f_kminus1
   let (bvs, ivs) = getAllVars (system c)
       (bvs', ivs') = (map Next bvs, map Next ivs)
       (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
   bv_asts <- mapM mkVariable bvs''
   iv_asts <- mapM mkVariable ivs''
-  res <- lift $ withModel $ \m ->
-    (evalBoolsAndInts m) (bv_asts, iv_asts)
-  z $ pop 1
-  return undefined --TODO
+  -- Assertions and actual SAT check:
+  (res, maybeVals) <- zlocal $ do
+    assert s
+    assert =<< mkNot s'
+    assert f_kminus1
+    withModel $ \m ->
+      (evalBoolsAndInts m) (bv_asts, iv_asts)
+  let assignment = case maybeVals of (Nothing) -> Nothing
+                                     (Just (maybeBools, maybeInts)) -> Just $
+                                      A { bvs = maybeMap bvs'' maybeBools
+                                        , ivs = maybeMap ivs'' maybeInts }
+  return (res, assignment)
 
-
-
+-- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Assignment -> PDRZ3 Assignment
-generalise1 a = do undefined
-  
+generalise1 a = do
+  let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
+  c <- get
+  let p = prop c
+      n = length $ frames c
+  f_n <- mkFrame n  
+  z push
+  -- Assume the frame and safety property:
+  z $ assert f_n  
+  z $ assert p
+  -- Try the assignment once for each variable:
+  a' <- foldM generalise1once a vars
+  z $ pop 1
+  return a'
+ where
+  generalise1once ass var = do
+   redundant <- checkLiteral1 ass var
+   return $ if redundant then (removeVar ass var) else ass
 
+-- Checks one literal to see if it can be removed from the assignment
+checkLiteral1 :: Assignment -> Variable -> PDRZ3 Bool
+checkLiteral1 a var = do
+  -- Assume the modified assignment
+  asts <- mapM mkPredicate $ [ (if (v==var) then id else pnot) $
+                                (if b then id else pnot) $
+                                 P $ BLit v
+                             | (v,b) <- M.toList $ bvs a
+                             ] ++
+                             [ (if (v==var) then id else pnot) $
+                                P $ ILit Equals (IntVar v) (IntConst (n))
+                             | (v,n) <- M.toList $ ivs a
+                             ]
+  res <- zlocal $ do
+   mapM assert asts
+   check
+  return (res == Unsat)
+
+
+
+-- TODO
 generalise2 :: Assignment -> PDRZ3 Assignment
 generalise2 a = undefined
 
@@ -297,14 +339,11 @@ mkPredicate p = do
 mkPredicate' :: Predicate -> PDRZ3 AST
 mkPredicate' (P lit) = mkLiteral lit
 mkPredicate' (PNot p) = do
-  ast <- mkPredicate p
-  z $ mkNot ast
+  (z . mkNot) =<< (mkPredicate p)
 mkPredicate' (PAnd ps) = do
-  asts <- mapM mkPredicate ps
-  z $ mkAnd asts
+  (z . mkAnd) =<< (mapM mkPredicate ps)
 mkPredicate' (POr ps) = do
-  asts <- mapM mkPredicate ps
-  z $ mkOr asts
+  (z . mkOr) =<< (mapM mkPredicate ps)
 
 mkLiteral :: Literal -> PDRZ3 AST
 mkLiteral l = do
@@ -353,14 +392,9 @@ mkIntExpr' ie = do
 
 mkIntExpr'' :: IntExpr -> PDRZ3 AST
 mkIntExpr'' (IntConst n) = z $ mkIntNum n
-mkIntExpr'' (Plus ie1 ie2) = mkIntExprOp mkAdd [ie1, ie2]
-mkIntExpr'' (Minus ie1 ie2) = mkIntExprOp mkSub [ie1, ie2]
+mkIntExpr'' (Plus ie1 ie2) = (z . mkAdd) =<< (mapM mkIntExpr [ie1, ie2])
+mkIntExpr'' (Minus ie1 ie2) = (z . mkSub) =<< (mapM mkIntExpr [ie1, ie2])
 mkIntExpr'' (IntVar v) = mkVariable v
-
-mkIntExprOp :: ([AST] -> Z3 AST) -> [IntExpr] -> PDRZ3 AST
-mkIntExprOp fun ies = do
-  asts <- mapM mkIntExpr ies
-  z $ fun asts
 
 mkVariable :: Variable -> PDRZ3 AST
 mkVariable v = do

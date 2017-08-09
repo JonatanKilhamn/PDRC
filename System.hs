@@ -18,7 +18,7 @@ data Predicate
    deriving ( Eq, Show, Ord )
 
 data IntExpr
- = IntConst Int
+ = IntConst Integer
  | Plus (IntExpr) (IntExpr)
  | Minus (IntExpr) (IntExpr)
  | IntVar Variable
