@@ -1,14 +1,26 @@
 module System where
 
 import qualified Data.Set as Set
+import qualified Data.Map as M
 import Data.Function
 
 type VariableName = String
 data Variable = Var VariableName | Next Variable
  deriving (Eq, Show, Ord)
 
+class Temporal a where
+    next :: a -> a
+
+
+instance Temporal Variable where
+  next = Next
+
 data Literal = BLit Variable | ILit BinaryPred (IntExpr) (IntExpr)
  deriving (Eq, Show, Ord)
+
+instance Temporal Literal where
+  next (BLit v) = BLit $ next v
+  next (ILit bp ie1 ie2) = ILit bp (next ie1) (next ie2)
 
 data Predicate
   = P Literal
@@ -17,6 +29,12 @@ data Predicate
   | POr [Predicate]
    deriving ( Eq, Show, Ord )
 
+instance Temporal Predicate where
+  next (P l) = P (next l)
+  next (PNot p) = PNot (next p)
+  next (PAnd ps) = PAnd (map next ps)
+  next (POr ps) = POr (map next ps)
+  
 data IntExpr
  = IntConst Integer
  | Plus (IntExpr) (IntExpr)
@@ -24,6 +42,12 @@ data IntExpr
  | IntVar Variable
   deriving ( Eq, Show, Ord)
 
+instance Temporal IntExpr where
+  next (IntVar v) = IntVar $ next v
+  next (Plus ie1 ie2) = Plus (next ie1) (next ie2)
+  next (Minus ie1 ie2) = Minus (next ie1) (next ie2)
+  next ie = ie
+    
 data BinaryPred
  = Equals
  | NEquals
@@ -44,6 +68,26 @@ instance Show BinaryPred where
 pnot :: Predicate -> Predicate
 pnot (PNot p) = p
 pnot p = PNot p
+
+
+data Assignment = A { bvs :: M.Map Variable Bool
+                    , ivs :: M.Map Variable Integer
+                    }
+
+removeVar :: Assignment -> Variable -> Assignment
+removeVar a v = a { bvs = M.delete v $ bvs a
+                  , ivs = M.delete v $ ivs a }
+
+instance Temporal Assignment where
+  next a = a { bvs = updateKeys (bvs a) next
+             , ivs = updateKeys (ivs a) next }
+
+updateKeys :: (Ord k, Ord k2) => M.Map k v -> (k -> k2) -> M.Map k2 v
+updateKeys m fun = M.fromList $ map (mapFst fun) $ M.toList m
+
+mapFst :: (a -> b) -> (a, c) -> (b, c)
+mapFst f (x,y) = (f x,y)
+
 
 data System
   = S { boolVars :: Set.Set VariableName

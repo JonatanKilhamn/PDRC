@@ -88,7 +88,7 @@ blockBadState (s,k) =
   (res, maybeAssignment) <- consecutionQuery (s,k)
   if (res == Sat)
   then do
-    m <- generalise2 (fromJust maybeAssignment)
+    m <- generalise2 (fromJust maybeAssignment) (s,k)
     putQueue $ (m, k-1):(queue ++ [(s,k)])
   else do
     updateFrames s k
@@ -123,14 +123,6 @@ updateFrames s k = undefined
 -- TODO
 forwardPropagation :: PDRZ3 Bool
 forwardPropagation = return True
-
-data Assignment = A { bvs :: M.Map Variable Bool
-                    , ivs :: M.Map Variable Integer
-                    }
-
-removeVar :: Assignment -> Variable -> Assignment
-removeVar a v = a { bvs = M.delete v $ bvs a
-                  , ivs = M.delete v $ ivs a }
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -170,9 +162,9 @@ consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
 consecutionQuery (ass,k) = do
   c <- get
   let p = prop c
-  s <- mkTimedCube (ass,k-1)
-  s' <- mkTimedCube (ass,k)
-  t <- mkTransRelation (k-1)
+  s <- mkAssignment ass
+  s' <- mkAssignment $ next ass
+  t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
       (bvs', ivs') = (map Next bvs, map Next ivs)
@@ -210,32 +202,54 @@ generalise1 a = do
   return a'
  where
   generalise1once ass var = do
-   redundant <- checkLiteral1 ass var
+   redundant <- checkLiteral ass var
    return $ if redundant then (removeVar ass var) else ass
 
 -- Checks one literal to see if it can be removed from the assignment
-checkLiteral1 :: Assignment -> Variable -> PDRZ3 Bool
-checkLiteral1 a var = do
+checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
+checkLiteral a var = do
   -- Assume the modified assignment
-  asts <- mapM mkPredicate $ [ (if (v==var) then id else pnot) $
-                                (if b then id else pnot) $
-                                 P $ BLit v
-                             | (v,b) <- M.toList $ bvs a
-                             ] ++
-                             [ (if (v==var) then id else pnot) $
-                                P $ ILit Equals (IntVar v) (IntConst (n))
-                             | (v,n) <- M.toList $ ivs a
-                             ]
+  ast <- mkPredicate $ PAnd $ [ (if (v==var) then id else pnot) $
+                                 (if b then id else pnot) $
+                                  P $ BLit v
+                              | (v,b) <- M.toList $ bvs a
+                              ] ++
+                              [ (if (v==var) then id else pnot) $
+                                 P $ ILit Equals (IntVar v) (IntConst (n))
+                              | (v,n) <- M.toList $ ivs a
+                              ]
   res <- zlocal $ do
-   mapM assert asts
+   assert ast
    check
   return (res == Unsat)
 
 
-
--- TODO
-generalise2 :: Assignment -> PDRZ3 Assignment
-generalise2 a = undefined
+-- Generalising an assignment which breaks consecution of another property !s
+-- (!s a clause based on the previously found bac cube s)
+generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
+generalise2 a (ass,k) = do
+  let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
+  f_kminus1 <- mkFrame (k-1)
+  s <- mkAssignment ass
+  s' <- mkAssignment $ next ass
+  trans_kminus1 <- mkTransRelation
+  z push
+  -- Assume !s, frame, transition and !s'
+  -- if satisfiable with one literal changed, that literal is necessary
+  -- if unsatisfiable       -  |  |  -        that literal can be removed
+  z $ do
+    assert f_kminus1
+    assert =<< mkNot s
+    assert =<< mkNot s'
+    assert trans_kminus1
+  -- Try the assignment once for each variable:
+  a' <- foldM generalise2once a vars
+  z $ pop 1
+  return a'
+ where
+  generalise2once ass var = do
+   redundant <- checkLiteral ass var
+   return $ if redundant then (removeVar ass var) else ass
 
 type TimedCube = Timed Assignment
 
@@ -408,8 +422,15 @@ mkVariable' v = mkVar' v ""
  where mkVar' (Var v) s = z $ mkFreshBoolVar (v++s)
        mkVar' (Next v) s = mkVar' v (s++"'")
 
-
-
+mkAssignment :: Assignment -> PDRZ3 AST
+mkAssignment a =
+  mkPredicate $ PAnd $ [ (if b then id else pnot) $
+                          P $ BLit v
+                       | (v,b) <- M.toList $ bvs a
+                       ] ++
+                       [ P $ ILit Equals (IntVar v) (IntConst (n))
+                       | (v,n) <- M.toList $ ivs a
+                       ]
 
 
 
@@ -418,10 +439,10 @@ mkVariable' v = mkVar' v ""
 mkTimedCube :: TimedCube -> PDRZ3 AST
 mkTimedCube tc = undefined
 
--- "i" is the frame index of the next-state variables
+-- "i" is the frame index of the current-state
 -- TODO
-mkTransRelation :: Int -> PDRZ3 AST
-mkTransRelation i = undefined
+mkTransRelation :: PDRZ3 AST
+mkTransRelation = undefined
 
 
 
