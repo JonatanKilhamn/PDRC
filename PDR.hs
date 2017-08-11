@@ -101,11 +101,11 @@ blockBadState (s,k) =
 addNewFrame :: PDRZ3 ()
 addNewFrame = do
   c <- get
-  put $ c {frames = (frames c)++[emptyFrame]}
+  put $ c {frames = (frames c) +++ emptyFrame}
   return ()
 
 emptyFrame :: Frame
-emptyFrame = ([], Nothing)
+emptyFrame = Frame []
 
 getMaxFrameIndex :: PDRZ3 Int
 getMaxFrameIndex = get >>= (return . length . frames)
@@ -115,7 +115,6 @@ getMaxFrameIndex = get >>= (return . length . frames)
 -- * subsumption?
 -- * Do we keep all clauses in all frames, or just in the last one where
 --   they appear?
--- Needs to either augment the monad, or add return type other than ()
 updateFrames :: Assignment -> Int -> PDRZ3 ()
 updateFrames s k = undefined
 
@@ -273,10 +272,10 @@ popMin = do
 
 type Timed a = (a,Int)
 
--- Placeholders! TODO: fix them
-type Frame = ([Predicate], Maybe AST)
+-- Each clause is the negation of a (generalised) bad cube
+data Frame = Init Predicate | Frame [Clause]
 
-
+type Clause = [Literal]
 
 data SMTContext
   = C
@@ -306,7 +305,7 @@ putInitialSmtContext :: System -> PDRZ3 ()
 putInitialSmtContext s = do
   p <- getProp s
   c <- get
-  put $ c {system = s, prop = p} 
+  put $ c {system = s, prop = p, frames = [Init (System.init s)]} 
   return ()
 
 
@@ -322,33 +321,32 @@ getProp s = mkPredicate (safetyProp s)
 ------
 
 
--- Int is the frame index
+-- k is the frame index
 mkFrame :: Int -> PDRZ3 AST
 mkFrame k = do
   c <- get
-  let (ps,maybe_ast) = (frames c)!!k
-  case maybe_ast of
-    (Just ast) -> return ast
-    (Nothing) -> do
-      ast <- mkPredicate (PAnd ps)
-      let frames' = replaceAtIndex k (ps,Just ast) (frames c)
-      put $ c {frames = frames'}
-      return ast
+  -- If there are fr_0, fr_1, ..., fr_5, this will be called with k=5.
+  -- Haskell's zero-indexing means we must use (frames c)!!(k-1)
+  let fr_k = (frames c)!!(k-1)
+  case fr_k of
+    (Init p) -> mkPredicate (p)
+    (Frame cs) -> mkPredicate . PAnd . map clauseToPredicate $ cs
 
-replaceAtIndex :: Int -> a -> [a] -> [a]
-replaceAtIndex n item ls = a ++ (item:b) where (a, (_:b)) = splitAt n ls
-
-
+clauseToPredicate :: Clause -> Predicate
+clauseToPredicate lits = POr (map P lits)
 
 
 mkPredicate :: Predicate -> PDRZ3 AST
 mkPredicate p = do
-  ast <- mkPredicate' p
   c <- get
   let pm = predMap c
-  let pm' = M.insert p ast pm
-  put c {predMap = pm'}
-  return ast
+  let maybeAst = M.lookup p pm
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> do
+                    ast <- mkPredicate' p
+                    let pm' = M.insert p ast pm
+                    put c {predMap = pm'}
+                    return ast
 
 mkPredicate' :: Predicate -> PDRZ3 AST
 mkPredicate' (P lit) = mkLiteral lit
@@ -452,8 +450,8 @@ mkTransRelation = undefined
 
 
 
-
-
+(+++) :: [a] -> a -> [a]
+list +++ elem = list ++ [elem]
 
 
 
