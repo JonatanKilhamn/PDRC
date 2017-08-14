@@ -78,6 +78,7 @@ pnot p = PNot p
 data Assignment = A { bvs :: M.Map Variable Bool
                     , ivs :: M.Map Variable Integer
                     }
+ deriving ( Eq )
 
 removeVar :: Assignment -> Variable -> Assignment
 removeVar a v = a { bvs = M.delete v $ bvs a

@@ -7,6 +7,7 @@ import Data.List
 import qualified Data.Traversable as T
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.PQueue.Min as Q
 import ControlMonadLoops
 import Control.Monad.State.Lazy
 
@@ -58,7 +59,7 @@ blockAllBadStatesInLastFrame = do
   then return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
-  putQueue $ priorityQueue (assignment,n)
+  putQueue $ priorityQueue (TC assignment n)
   failed <- blockEntireQueue
   if failed
   then return False
@@ -66,35 +67,35 @@ blockAllBadStatesInLastFrame = do
   blockAllBadStatesInLastFrame
 
 
+-- Returns: true when entire queue is blocked; false if property is disproven
 blockEntireQueue :: PDRZ3 Bool
 blockEntireQueue = do
   queue <- fmap prioQueue get
-  if ((length queue) == 0)
+  if (Q.null queue)
   then return True
   else do
   t <- popMin
-  failed <- blockBadState t
-  if failed
+  success <- blockBadState t
+  if (not success)
   then return False
   else do
   blockEntireQueue
 
-
+-- Returns: false if property was disproven, true if state was blocked (or delegated)
 blockBadState :: TimedCube -> PDRZ3 Bool
-blockBadState (s,k) =
+blockBadState (TC s k) =
   if k == 0
   then return False
   else do
-  queue <- fmap prioQueue get
-  (res, maybeAssignment) <- consecutionQuery (s,k)
+  (res, maybeAssignment) <- consecutionQuery (TC s k)
   if (res == Sat)
   then do
-    m <- generalise2 (fromJust maybeAssignment) (s,k)
-    putQueue $ (m, k-1):(queue ++ [(s,k)])
+    m <- generalise2 (fromJust maybeAssignment) (TC s k)
+    mapM_ queueInsert [TC m (k-1), TC s k]
   else do
-    updateFrames (s, k)
+    updateFrames (TC s k)
     n <- getMaxFrameIndex
-    putQueue $ if (k < n) then (queue++[(s,k+1)]) else queue
+    when (k < n) (queueInsert (TC s (k+1)))
   return True
 
 
@@ -171,7 +172,7 @@ evalBoolsAndInts m (as1,as2) = do
 
 
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
-consecutionQuery (ass,k) = do
+consecutionQuery (TC ass k) = do
   c <- get
   let p = prop c
   s <- mkAssignment ass
@@ -190,11 +191,11 @@ consecutionQuery (ass,k) = do
     assert f_kminus1
     withModel $ \m ->
       (evalBoolsAndInts m) (bv_asts, iv_asts)
-  let assignment = case maybeVals of (Nothing) -> Nothing
-                                     (Just (maybeBools, maybeInts)) -> Just $
-                                      A { bvs = maybeMap bvs'' maybeBools
-                                        , ivs = maybeMap ivs'' maybeInts }
-  return (res, assignment)
+  let maybeAss = case maybeVals of (Nothing) -> Nothing
+                                   (Just (maybeBools, maybeInts)) -> Just $
+                                    A { bvs = maybeMap bvs'' maybeBools
+                                      , ivs = maybeMap ivs'' maybeInts }
+  return (res, maybeAss)
 
 -- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Assignment -> PDRZ3 Assignment
@@ -237,7 +238,7 @@ checkLiteral a var = do
 -- Generalising an assignment which breaks consecution of another property !s
 -- (!s a clause based on the previously found bac cube s)
 generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
-generalise2 a (ass,k) = do
+generalise2 a (TC ass k) = do
   let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
@@ -275,7 +276,7 @@ getMaxFrameIndex = get >>= (return . (+1) . length . frames)
 
 
 updateFrames :: TimedCube -> PDRZ3 ()
-updateFrames (s, k) = do
+updateFrames (TC s k) = do
   let clause = invertAssignment s
   c <- get
   let newFrames = [ if (i < k) then (addTo fr clause) else fr
@@ -283,7 +284,6 @@ updateFrames (s, k) = do
                     , i <- [1..]
                   ]
   put $ c {frames = newFrames}
-  return ()
  where addTo (Init p) cl = (Init p)
        addTo (Frame cls) cl =
          -- TODO: subsumption check
@@ -292,27 +292,33 @@ updateFrames (s, k) = do
 
 
 
+data TimedCube = TC Assignment Int
+ deriving ( Eq )
 
-type PriorityQueue = [TimedCube] -- maybe placeholder?
+instance Ord TimedCube where
+ (TC a i) <= (TC b j) = i <= j
 
--- TODO: change prioQ implementation to actual queue
+
+type PriorityQueue = Q.MinQueue TimedCube
+
 priorityQueue :: TimedCube -> PriorityQueue
-priorityQueue elem = [elem]
+priorityQueue elem = Q.singleton elem
 
--- TODO: actual popMin / change prioQ implementation
 popMin :: PDRZ3 TimedCube
 popMin = do
   c <- get
   let q = prioQueue c
-      tc = head q
-      q' = tail q
+      tc = Q.findMin q
+      q' = Q.deleteMin q
   putQueue q'
   return tc
 
+queueInsert :: TimedCube -> PDRZ3 ()
+queueInsert tc = do
+  queue <- fmap prioQueue get
+  putQueue $ Q.insert tc queue
+  
 
-
-type Timed a = (a,Int)
-type TimedCube = Timed Assignment
 
 
 -- Each clause is the negation of a (generalised) bad cube
@@ -344,7 +350,7 @@ emptyContext = C { system = undefined
                  , litMap = M.empty
                  , varMap = M.empty
                  , frames = []
-                 , prioQueue = []
+                 , prioQueue = Q.empty
                  , prop = undefined
                  }
 
