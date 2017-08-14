@@ -274,8 +274,6 @@ getMaxFrameIndex :: PDRZ3 Int
 getMaxFrameIndex = get >>= (return . (+1) . length . frames)
 
 
--- TODO:
--- * subsumption?
 updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (s, k) = do
   let clause = invertAssignment s
@@ -287,9 +285,9 @@ updateFrames (s, k) = do
   put $ c {frames = newFrames}
   return ()
  where addTo (Init p) cl = (Init p)
-       addTo (Frame cls) cl = do
-         undefined
-         -- TODO 
+       addTo (Frame cls) cl =
+         -- TODO: subsumption check
+         Frame (S.union (S.singleton cl) cls)
 
 
 
