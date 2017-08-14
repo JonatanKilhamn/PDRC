@@ -115,13 +115,16 @@ forwardPropOneFrame k = do
   c <- get
   let frs = frames c
       (Frame clauses) = frs!!k
-  shouldMoves <- mapM (tryForwardProp k) clauses
-  let clausesToMove = map snd $ filter (\(b,_) -> b) $ zip shouldMoves clauses
-      (Frame nextClauses) = frs!!(k+1)
-      nextClauses' = nextClauses ++ clausesToMove
+  clausesToMove <- foldM try (S.empty) clauses
+  let (Frame nextClauses) = frs!!(k+1)
+      nextClauses' = S.union nextClauses clausesToMove
       newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+1) frs)
   put c { frames = newFrames }
-  return (S.fromList clauses == S.fromList nextClauses')
+  return (clauses == nextClauses')
+ where try acc clause = do
+        res <- tryForwardProp k clause
+        let newAcc = (S.union (S.singleton clause) acc)
+        return $ if res then newAcc else acc
 
 tryForwardProp :: Int -> Clause -> PDRZ3 Bool
 tryForwardProp k clause = do
@@ -265,7 +268,7 @@ addNewFrame = do
   return ()
 
 emptyFrame :: Frame
-emptyFrame = Frame []
+emptyFrame = Frame (S.empty)
 
 getMaxFrameIndex :: PDRZ3 Int
 getMaxFrameIndex = get >>= (return . (+1) . length . frames)
@@ -284,9 +287,9 @@ updateFrames (s, k) = do
   put $ c {frames = newFrames}
   return ()
  where addTo (Init p) cl = (Init p)
-       addTo (Frame [cls]) cl = do
+       addTo (Frame cls) cl = do
          undefined
-  
+         -- TODO 
 
 
 
@@ -315,7 +318,7 @@ type TimedCube = Timed Assignment
 
 
 -- Each clause is the negation of a (generalised) bad cube
-data Frame = Init Predicate | Frame [Clause]
+data Frame = Init Predicate | Frame (S.Set Clause)
 
 type Clause = [Literal]
 
@@ -373,11 +376,10 @@ mkFrame k = do
   let fr_k = (frames c) !! k
   case fr_k of
     (Init p) -> mkPredicate (p)
-    (Frame cs) -> mkPredicate . PAnd . map clauseToPredicate $ cs
+    (Frame cs) -> mkPredicate . PAnd . map clauseToPredicate . S.toList $ cs
 
 clauseToPredicate :: Clause -> Predicate
 clauseToPredicate lits = POr (map P lits)
-
 
 mkPredicate :: Predicate -> PDRZ3 AST
 mkPredicate p = do
