@@ -22,6 +22,9 @@ instance Temporal Literal where
   next (BLit v b) = BLit (next v) b
   next (ILit bp ie1 ie2) = ILit bp (next ie1) (next ie2)
 
+instance (Temporal a) => Temporal [a] where
+  next = map next
+
 data Predicate
   = P Literal
   | PNot (Predicate)

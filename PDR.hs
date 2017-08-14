@@ -6,6 +6,7 @@ import Data.Maybe
 import Data.List
 import qualified Data.Traversable as T
 import qualified Data.Map as M
+import qualified Data.Set as S
 import ControlMonadLoops
 import Control.Monad.State.Lazy
 
@@ -51,13 +52,13 @@ outerPdrLoop s = do
 blockAllBadStatesInLastFrame :: PDRZ3 Bool
 blockAllBadStatesInLastFrame = do
   let setup = undefined -- some setup surely needed
-  k <- getMaxFrameIndex
+  n <- getMaxFrameIndex
   (res, maybeAssignment) <- unsafeStateQuery
-  if (res == Unsat)
+  if (res == Unsat) -- There is no unsafe state in F_n
   then return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
-  putQueue $ priorityQueue (assignment,k)
+  putQueue $ priorityQueue (assignment,n)
   failed <- blockEntireQueue
   if failed
   then return False
@@ -98,18 +99,46 @@ blockBadState (s,k) =
 
 
 
--- TODO
 -- Returns: true if property is proven (inductive invariant found),
 --   false if another iteration is needed
 forwardPropagation :: PDRZ3 Bool
-forwardPropagation = return undefined
+forwardPropagation = do
+  n <- getMaxFrameIndex
+  isFixedPoints <- mapM forwardPropOneFrame [2..(n-1)]
+  return $ or isFixedPoints
+
+-- Precondition: k>1
+-- Returns: true if the next frame is syntactically equal to the current one
+--   after propagation
+forwardPropOneFrame :: Int -> PDRZ3 Bool
+forwardPropOneFrame k = do
+  c <- get
+  let frs = frames c
+      (Frame clauses) = frs!!k
+  shouldMoves <- mapM (tryForwardProp k) clauses
+  let clausesToMove = map snd $ filter (\(b,_) -> b) $ zip shouldMoves clauses
+      (Frame nextClauses) = frs!!(k+1)
+      nextClauses' = nextClauses ++ clausesToMove
+      newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+1) frs)
+  put c { frames = newFrames }
+  return (S.fromList clauses == S.fromList nextClauses')
+
+tryForwardProp :: Int -> Clause -> PDRZ3 Bool
+tryForwardProp k clause = do
+  fr_k <- mkFrame k
+  cl' <- mkClause (next clause)
+  res <- zlocal $ do
+   assert fr_k
+   assert =<< mkNot cl'
+   check
+  return (res == Unsat) -- TODO: what about Undef?
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
 unsafeStateQuery = do
   c <- get
   let p = prop c
-      n = length $ frames c
+  n <- getMaxFrameIndex
   f_n <- mkFrame n
   let (bvs, ivs) = getAllVars (system c)
   bv_asts <- mapM mkVariable bvs
@@ -170,8 +199,8 @@ generalise1 a = do
   let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
   c <- get
   let p = prop c
-      n = length $ frames c
-  f_n <- mkFrame n  
+  n <- getMaxFrameIndex
+  f_n <- mkFrame n
   z push
   -- Assume the frame and safety property:
   z $ assert f_n  
@@ -239,13 +268,11 @@ emptyFrame :: Frame
 emptyFrame = Frame []
 
 getMaxFrameIndex :: PDRZ3 Int
-getMaxFrameIndex = get >>= (return . length . frames)
+getMaxFrameIndex = get >>= (return . (+1) . length . frames)
+
 
 -- TODO:
--- * Should update all frames with i≤k
 -- * subsumption?
--- * Do we keep all clauses in all frames, or just in the last one where
---   they appear?
 updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (s, k) = do
   let clause = invertAssignment s
@@ -303,7 +330,7 @@ data SMTContext
   , intExprMap :: M.Map (IntExpr) AST
   , litMap :: M.Map (Literal) AST
   , varMap :: M.Map (Variable) AST
-  , frames :: [Frame]
+  , frames :: [Frame] -- replace with M.Map Int Frame?
   , prioQueue :: PriorityQueue
   , prop :: AST
   }
@@ -339,14 +366,11 @@ getProp s = mkPredicate (safetyProp s)
 
 ------
 
-
 -- k is the frame index
 mkFrame :: Int -> PDRZ3 AST
 mkFrame k = do
   c <- get
-  -- If there are fr_0, fr_1, ..., fr_5, this will be called with k=5.
-  -- Haskell's zero-indexing means we must use (frames c)!!(k-1)
-  let fr_k = (frames c)!!(k-1)
+  let fr_k = (frames c) !! k
   case fr_k of
     (Init p) -> mkPredicate (p)
     (Frame cs) -> mkPredicate . PAnd . map clauseToPredicate $ cs
@@ -462,6 +486,9 @@ invertAssignment a =
   | (v,n) <- M.toList $ ivs a
   ]
 
+
+mkClause :: Clause -> PDRZ3 AST
+mkClause = mkPredicate . PAnd . (map P)
 
 
 -- TODO
