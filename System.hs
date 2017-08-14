@@ -15,11 +15,11 @@ class Temporal a where
 instance Temporal Variable where
   next = Next
 
-data Literal = BLit Variable | ILit BinaryPred (IntExpr) (IntExpr)
+data Literal = BLit Variable Bool | ILit BinaryPred (IntExpr) (IntExpr)
  deriving (Eq, Show, Ord)
 
 instance Temporal Literal where
-  next (BLit v) = BLit $ next v
+  next (BLit v b) = BLit (next v) b
   next (ILit bp ie1 ie2) = ILit bp (next ie1) (next ie2)
 
 data Predicate
@@ -67,6 +67,8 @@ instance Show BinaryPred where
 
 pnot :: Predicate -> Predicate
 pnot (PNot p) = p
+pnot (PAnd ps) = POr (map pnot ps)
+pnot (POr ps) = PAnd (map pnot ps)
 pnot p = PNot p
 
 
@@ -122,8 +124,8 @@ allVarsInPred (POr ps) = Set.unions $ map allVarsInPred ps
 allVarsInPred (PAnd ps) = Set.unions $ map allVarsInPred ps
 
 allVarsInLit :: Literal -> Set.Set Variable
-allVarsInLit (BLit v) = Set.singleton v
-allVarsInLit (ILit bp e1 e2) = Set.unions $ map allVarsInExpr [e1, e2]
+allVarsInLit (BLit v _) = Set.singleton v
+allVarsInLit (ILit _ e1 e2) = Set.unions $ map allVarsInExpr [e1, e2]
 
 allVarsInExpr :: IntExpr -> Set.Set Variable
 allVarsInExpr (IntConst i) = Set.empty

@@ -35,7 +35,7 @@ pdr s = do
 outerPdrLoop :: System -> PDRZ3 Bool
 outerPdrLoop s = do
   failed <- blockAllBadStatesInLastFrame
-  if failed
+  if (not failed)
   then return False
   else do
   addNewFrame
@@ -91,37 +91,18 @@ blockBadState (s,k) =
     m <- generalise2 (fromJust maybeAssignment) (s,k)
     putQueue $ (m, k-1):(queue ++ [(s,k)])
   else do
-    updateFrames s k
+    updateFrames (s, k)
     n <- getMaxFrameIndex
     putQueue $ if (k < n) then (queue++[(s,k+1)]) else queue
   return True
 
 
 
-addNewFrame :: PDRZ3 ()
-addNewFrame = do
-  c <- get
-  put $ c {frames = (frames c) +++ emptyFrame}
-  return ()
-
-emptyFrame :: Frame
-emptyFrame = Frame []
-
-getMaxFrameIndex :: PDRZ3 Int
-getMaxFrameIndex = get >>= (return . length . frames)
-
--- TODO:
--- * Should update all frames with i≤k
--- * subsumption?
--- * Do we keep all clauses in all frames, or just in the last one where
---   they appear?
-updateFrames :: Assignment -> Int -> PDRZ3 ()
-updateFrames s k = undefined
-
-
 -- TODO
+-- Returns: true if property is proven (inductive invariant found),
+--   false if another iteration is needed
 forwardPropagation :: PDRZ3 Bool
-forwardPropagation = return True
+forwardPropagation = return undefined
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -208,9 +189,7 @@ generalise1 a = do
 checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
 checkLiteral a var = do
   -- Assume the modified assignment
-  ast <- mkPredicate $ PAnd $ [ (if (v==var) then id else pnot) $
-                                 (if b then id else pnot) $
-                                  P $ BLit v
+  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if (v==var) then b else not b)
                               | (v,b) <- M.toList $ bvs a
                               ] ++
                               [ (if (v==var) then id else pnot) $
@@ -250,7 +229,41 @@ generalise2 a (ass,k) = do
    redundant <- checkLiteral ass var
    return $ if redundant then (removeVar ass var) else ass
 
-type TimedCube = Timed Assignment
+addNewFrame :: PDRZ3 ()
+addNewFrame = do
+  c <- get
+  put $ c {frames = (frames c) +++ emptyFrame}
+  return ()
+
+emptyFrame :: Frame
+emptyFrame = Frame []
+
+getMaxFrameIndex :: PDRZ3 Int
+getMaxFrameIndex = get >>= (return . length . frames)
+
+-- TODO:
+-- * Should update all frames with i≤k
+-- * subsumption?
+-- * Do we keep all clauses in all frames, or just in the last one where
+--   they appear?
+updateFrames :: TimedCube -> PDRZ3 ()
+updateFrames (s, k) = do
+  let clause = invertAssignment s
+  c <- get
+  let newFrames = [ if (i < k) then (addTo fr clause) else fr
+                  | fr <- frames c
+                    , i <- [1..]
+                  ]
+  put $ c {frames = newFrames}
+  return ()
+ where addTo (Init p) cl = (Init p)
+       addTo (Frame [cls]) cl = do
+         undefined
+  
+
+
+
+
 
 type PriorityQueue = [TimedCube] -- maybe placeholder?
 
@@ -271,11 +284,17 @@ popMin = do
 
 
 type Timed a = (a,Int)
+type TimedCube = Timed Assignment
+
 
 -- Each clause is the negation of a (generalised) bad cube
 data Frame = Init Predicate | Frame [Clause]
 
 type Clause = [Literal]
+
+
+----
+
 
 data SMTContext
   = C
@@ -374,7 +393,8 @@ mkLiteral' l = do
   return ast
 
 mkLiteral'' :: Literal -> PDRZ3 AST
-mkLiteral'' (BLit v) = mkVariable v
+mkLiteral'' (BLit v b) = do
+ (z . mkNot) =<< mkVariable v
 mkLiteral'' (ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
@@ -422,14 +442,25 @@ mkVariable' v = mkVar' v ""
 
 mkAssignment :: Assignment -> PDRZ3 AST
 mkAssignment a =
-  mkPredicate $ PAnd $ [ (if b then id else pnot) $
-                          P $ BLit v
-                       | (v,b) <- M.toList $ bvs a
-                       ] ++
-                       [ P $ ILit Equals (IntVar v) (IntConst (n))
-                       | (v,n) <- M.toList $ ivs a
-                       ]
+  mkPredicate $ assignmentToPred a
 
+assignmentToPred :: Assignment -> Predicate
+assignmentToPred a = PAnd $
+  [ P $ BLit v b
+  | (v,b) <- M.toList $ bvs a
+  ] ++
+  [ P $ ILit Equals (IntVar v) (IntConst (n))
+  | (v,n) <- M.toList $ ivs a
+  ]
+
+invertAssignment :: Assignment -> Clause
+invertAssignment a =
+  [ BLit v (not b)
+  | (v,b) <- M.toList $ bvs a
+  ] ++
+  [ ILit NEquals (IntVar v) (IntConst (n))
+  | (v,n) <- M.toList $ ivs a
+  ]
 
 
 
