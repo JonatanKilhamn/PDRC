@@ -408,6 +408,7 @@ mkPredicate' (PAnd ps) = do
   (z . mkAnd) =<< (mapM mkPredicate ps)
 mkPredicate' (POr ps) = do
   (z . mkOr) =<< (mapM mkPredicate ps)
+mkPredicate' (PTop) = z $ mkTrue
 
 mkLiteral :: Literal -> PDRZ3 AST
 mkLiteral l = do

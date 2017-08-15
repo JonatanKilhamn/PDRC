@@ -25,11 +25,13 @@ instance Temporal Literal where
 instance (Temporal a) => Temporal [a] where
   next = map next
 
+
 data Predicate
   = P Literal
   | PNot (Predicate)
   | PAnd [Predicate]
   | POr [Predicate]
+  | PTop
    deriving ( Eq, Show, Ord )
 
 instance Temporal Predicate where
@@ -117,6 +119,7 @@ data TransitionRelation
        -- should have the current variable, not next
        , nextGuard :: Predicate
        }
+ deriving ( Show, Eq )
 
 makeCurrent :: Variable -> VariableName
 makeCurrent (Next v) = makeCurrent v
