@@ -28,8 +28,8 @@ type VarName = Name
 type Location = Name
 
 iePlus :: IntExpr -> IntExpr -> IntExpr
-iePlus (IntConst x) (IntConst y) = IntConst (x+y)
-iePlus a b = Plus a b
+iePlus (IEConst x) (IEConst y) = IEConst (x+y)
+iePlus a b = IEPlus a b
 
 {--varNames :: IntExpr -> [VarName]
 varNames (IntVar vn) = [vn]
@@ -79,7 +79,8 @@ data Automaton
   , marked :: [(Location, Predicate)]
   , initialLocation :: Location
   , uncontrollable :: S.Set Event
-  , autDomains :: M.Map VariableName Domain
+  , intDomains :: M.Map IntVariable Domain
+  , boolInits :: M.Map BoolVariable Bool
   }
   
 data AutTransition =
@@ -112,7 +113,8 @@ instance Show Automaton where
 data Synchronisation
   = Synch
   { automata :: [Automaton]
-  , synchDomains :: M.Map VariableName Domain
+  , synchDomains :: M.Map IntVariable Domain
+  , synchInits :: M.Map BoolVariable Bool
   }
 
 instance Show Synchronisation where
@@ -135,22 +137,15 @@ instance Show Synchronisation where
     | (name) <- S.toList $ getAllUncontrollable synch
     ]
 
-{--
-data System
-  = S { boolVars :: Set.Set VariableName
-      , intVars :: Set.Set VariableName
-      , trans :: [TransitionRelation]
-      , init :: Predicate
-      , safetyProp :: Predicate
-      }
---}
-
 
 events :: Automaton -> S.Set Event
 events a = S.fromList $ map event (transitions a)
 
 allEvents :: Synchronisation -> S.Set Event
 allEvents s = foldl S.union S.empty (map events $ automata s)
+
+allLocations :: Synchronisation -> S.Set Location
+allLocations s = foldl S.union S.empty (map locations $ automata s)
 
 {--
 getAllVars :: Automaton -> M.Map VarName Variable
@@ -174,38 +169,40 @@ setUncontrollable (e,b) aut =
 synchronise :: Automaton -> Synchronisation -> Synchronisation
 synchronise a s =
   s { automata = a:(automata s)
-    , synchDomains = M.unionWith takeFirst (synchDomains s) (autDomains a)
+    , synchDomains = M.unionWith takeFirst (synchDomains s) (intDomains a)
+    , synchInits = M.unionWith takeFirst (synchInits s) (boolInits a)
     }
  where takeFirst a b = a
  -- not stable in order of synchronisation, in the case where
  -- two automata specify different domains for the same variable
 
-setDefault :: (VariableName, Int) -> Synchronisation -> Synchronisation
-setDefault (name, n) s =
-  s {synchDomains = M.adjust (\d -> d {initial = n}) name (synchDomains s)
+setDefault :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setDefault (v, n) s =
+  s {synchDomains = M.adjust (\d -> d {initial = n}) v (synchDomains s)
     }
 
-setRangeMax :: (VariableName, Int) -> Synchronisation -> Synchronisation
-setRangeMax (name, n) s =
-  s {synchDomains = M.adjust (\d -> d {upper = n}) name (synchDomains s)
+setRangeMax :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setRangeMax (v, n) s =
+  s {synchDomains = M.adjust (\d -> d {upper = n}) v (synchDomains s)
     }
 
-setRangeMin :: (VariableName, Int) -> Synchronisation -> Synchronisation
-setRangeMin (name, n) s =
-  s {synchDomains = M.adjust (\d -> d {lower = n}) name (synchDomains s)
+setRangeMin :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setRangeMin (v, n) s =
+  s {synchDomains = M.adjust (\d -> d {lower = n}) v (synchDomains s)
     }
 
-setDomain :: (VariableName, Domain) -> Synchronisation -> Synchronisation
-setDomain (name, d) s = s {synchDomains = M.insert name d (synchDomains s)}
+setDomain :: (IntVariable, Domain) -> Synchronisation -> Synchronisation
+setDomain (v, d) s = s {synchDomains = M.insert v d (synchDomains s)}
 
 
-setDomains :: [(VariableName, Domain)] -> Synchronisation -> Synchronisation
+setDomains :: [(IntVariable, Domain)] -> Synchronisation -> Synchronisation
 setDomains ds s = foldr (setDomain) s ds
 
 
 emptySynch :: Synchronisation
 emptySynch = Synch {automata = []
                    , synchDomains = M.empty
+                   , synchInits = M.empty
                    --, synchLog = ""
                    }
 
@@ -221,5 +218,31 @@ isEventUncontrollable e =
 getAllUncontrollable :: Synchronisation -> S.Set Event
 getAllUncontrollable =
  (foldr S.union S.empty) . (map uncontrollable) . automata
+
+
+
+-- TODO
+synchToSystem :: Synchronisation -> System
+synchToSystem synch = undefined
+ S { boolVars = bVars -- :: Set.Set VariableName
+   , intVars = S.union iVars locVars -- :: Set.Set VariableName
+   , trans = undefined -- :: [TransitionRelation]
+   , System.init = undefined -- :: Predicate
+   , safetyProp = PTop
+   }
+  where
+   bVars = S.fromList $ M.keys $ synchInits synch
+   iVars = undefined
+   locVars = S.fromList $ map makeLocVar $ automata synch
+   makeLocVar aut = IntVar $ Var $ (autName aut)++"_loc"
+   --getLocNo aut n = elemAt n $ locations aut
+   --findIndex loc (locations aut)
+   
+      
+
+
+
+
+
 
 
