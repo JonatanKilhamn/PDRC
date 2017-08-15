@@ -144,8 +144,8 @@ unsafeStateQuery = do
   n <- getMaxFrameIndex
   f_n <- mkFrame n
   let (bvs, ivs) = getAllVars (system c)
-  bv_asts <- mapM mkVariable bvs
-  iv_asts <- mapM mkVariable ivs
+  bv_asts <- mapM mkBoolVariable bvs
+  iv_asts <- mapM mkIntVariable ivs
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot p
     assert f_n
@@ -181,10 +181,10 @@ consecutionQuery (TC ass k) = do
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
-      (bvs', ivs') = (map Next bvs, map Next ivs)
+      (bvs', ivs') = (map next bvs, map next ivs)
       (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
-  bv_asts <- mapM mkVariable bvs''
-  iv_asts <- mapM mkVariable ivs''
+  bv_asts <- mapM mkBoolVariable bvs''
+  iv_asts <- mapM mkIntVariable ivs''
   -- Assertions and actual SAT check:
   (res, maybeVals) <- zlocal $ do
     assert s
@@ -201,7 +201,7 @@ consecutionQuery (TC ass k) = do
 -- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Assignment -> PDRZ3 Assignment
 generalise1 a = do
-  let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
+  let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   c <- get
   let p = prop c
   n <- getMaxFrameIndex
@@ -223,11 +223,11 @@ generalise1 a = do
 checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
 checkLiteral a var = do
   -- Assume the modified assignment
-  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if (v==var) then b else not b)
+  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if ((BV v)==var) then b else not b)
                               | (v,b) <- M.toList $ bvs a
                               ] ++
-                              [ (if (v==var) then id else pnot) $
-                                 P $ ILit Equals (IntVar v) (IntConst (n))
+                              [ (if ((IV v)==var) then id else pnot) $
+                                 P $ ILit Equals (IEVar v) (IEConst (n))
                               | (v,n) <- M.toList $ ivs a
                               ]
   res <- zlocal $ do
@@ -240,7 +240,7 @@ checkLiteral a var = do
 -- (!s a clause based on the previously found bad cube s)
 generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
 generalise2 a (TC ass k) = do
-  let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
+  let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
@@ -428,7 +428,7 @@ mkLiteral' l = do
 
 mkLiteral'' :: Literal -> PDRZ3 AST
 mkLiteral'' (BLit v b) = do
- (z . mkNot) =<< mkVariable v
+ (z . mkNot) =<< mkBoolVariable v
 mkLiteral'' (ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
@@ -446,7 +446,7 @@ mkIntExpr ie = do
   let maybeAst = M.lookup ie iem
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> mkIntExpr' ie
-       
+
 mkIntExpr' :: IntExpr -> PDRZ3 AST
 mkIntExpr' ie = do
   ast <- mkIntExpr'' ie
@@ -457,22 +457,40 @@ mkIntExpr' ie = do
   return ast
 
 mkIntExpr'' :: IntExpr -> PDRZ3 AST
-mkIntExpr'' (IntConst n) = z $ mkIntNum n
-mkIntExpr'' (Plus ie1 ie2) = (z . mkAdd) =<< (mapM mkIntExpr [ie1, ie2])
-mkIntExpr'' (Minus ie1 ie2) = (z . mkSub) =<< (mapM mkIntExpr [ie1, ie2])
-mkIntExpr'' (IntVar v) = mkVariable v
+mkIntExpr'' (IEConst n) = z $ mkIntNum n
+mkIntExpr'' (IEPlus ie1 ie2) = (z . mkAdd) =<< (mapM mkIntExpr [ie1, ie2])
+mkIntExpr'' (IEMinus ie1 ie2) = (z . mkSub) =<< (mapM mkIntExpr [ie1, ie2])
+mkIntExpr'' (IEVar v) = mkIntVariable v
 
+mkBoolVariable :: BoolVariable -> PDRZ3 AST
+mkBoolVariable v = do
+  vm <- fmap varMap get
+  let maybeAst = M.lookup (BV v) vm
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> mkVariable (BV v)
+
+mkIntVariable :: IntVariable -> PDRZ3 AST
+mkIntVariable v = do
+  vm <- fmap varMap get
+  let maybeAst = M.lookup (IV v) vm
+  case maybeAst of (Just ast) -> return ast
+                   (Nothing) -> mkVariable (IV v)
+
+
+mkVariable :: Variable -> PDRZ3 AST
+mkVariable (BV (BoolVar v)) = z $ mkFreshBoolVar (show v)
+mkVariable (IV (IntVar v)) = z $ mkFreshIntVar (show v)
+
+
+{--
 mkVariable :: Variable -> PDRZ3 AST
 mkVariable v = do
   vm <- fmap varMap get
   let maybeAst = M.lookup v vm
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> mkVariable' v
+--}
 
-mkVariable' :: Variable -> PDRZ3 AST
-mkVariable' v = mkVar' v ""
- where mkVar' (Var v) s = z $ mkFreshBoolVar (v++s)
-       mkVar' (Next v) s = mkVar' v (s++"'")
 
 mkAssignment :: Assignment -> PDRZ3 AST
 mkAssignment a =
@@ -483,7 +501,7 @@ assignmentToPred a = PAnd $
   [ P $ BLit v b
   | (v,b) <- M.toList $ bvs a
   ] ++
-  [ P $ ILit Equals (IntVar v) (IntConst (n))
+  [ P $ ILit Equals (IEVar v) (IEConst (n))
   | (v,n) <- M.toList $ ivs a
   ]
 
@@ -492,7 +510,7 @@ invertAssignment a =
   [ BLit v (not b)
   | (v,b) <- M.toList $ bvs a
   ] ++
-  [ ILit NEquals (IntVar v) (IntConst (n))
+  [ ILit NEquals (IEVar v) (IEConst (n))
   | (v,n) <- M.toList $ ivs a
   ]
 
@@ -507,7 +525,7 @@ mkTransRelation = do
   let trans_pred = POr (map transRelationToPred trs)
   mkPredicate trans_pred
  where intUpdateToPred (var, ie) =
-         P $ ILit Equals (next $ IntVar var) ie
+         P $ ILit Equals (next $ IEVar var) ie
        transRelationToPred tr =
          PAnd $ [ System.guard tr
                 , nextRelation tr
@@ -523,7 +541,7 @@ list +++ elem = list ++ [elem]
 
 
 testz = do
- v <- mkVariable (Next $ Var "foo")
+ v <- mkVariable (next $ BV $ BoolVar $ Var "foo")
  z $ assert v
  nv <- z $ mkNot v
  --z $ assert nv
