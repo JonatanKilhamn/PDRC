@@ -8,7 +8,6 @@ import qualified Data.Traversable as T
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.PQueue.Min as Q
-import ControlMonadLoops
 import Control.Monad.State.Lazy
 
 import Z3.Monad
@@ -177,6 +176,8 @@ consecutionQuery (TC ass k) = do
   let p = prop c
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
+  -- TODO: use the substitution part of the trans relation
+  -- Right now the bad cube (assignment) includes next-state variables as well.
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
@@ -236,13 +237,15 @@ checkLiteral a var = do
 
 
 -- Generalising an assignment which breaks consecution of another property !s
--- (!s a clause based on the previously found bac cube s)
+-- (!s a clause based on the previously found bad cube s)
 generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
 generalise2 a (TC ass k) = do
   let vars = (M.keys $ bvs a) ++ (M.keys $ ivs a)
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
+  -- TODO: change the mkTransRelation to use the substitution technique for
+  --  integer variables.
   trans_kminus1 <- mkTransRelation
   z push
   -- Assume !s, frame, transition and !s'
@@ -497,19 +500,18 @@ mkClause :: Clause -> PDRZ3 AST
 mkClause = mkPredicate . PAnd . (map P)
 
 
--- TODO
-mkTimedCube :: TimedCube -> PDRZ3 AST
-mkTimedCube tc = undefined
-
--- "i" is the frame index of the current-state
--- TODO
 mkTransRelation :: PDRZ3 AST
-mkTransRelation = undefined
-
-
-
-
-
+mkTransRelation = do
+  trs <- fmap (trans . system) get
+  let trans_pred = POr (map transRelationToPred trs)
+  mkPredicate trans_pred
+ where intUpdateToPred (var, ie) =
+         P $ ILit Equals (next $ IntVar var) ie
+       transRelationToPred tr =
+         PAnd $ [ System.guard tr
+                , nextRelation tr
+                , nextGuard tr
+                ] ++ map intUpdateToPred (intUpdates tr)
 
 
 

@@ -114,6 +114,7 @@ data TransitionRelation
   = TR { guard :: Predicate
        , nextRelation :: Predicate
        , intUpdates :: [(Variable, IntExpr)]
+       -- should have the current variable, not next
        , nextGuard :: Predicate
        }
 
