@@ -223,22 +223,66 @@ getAllUncontrollable =
 
 -- TODO
 synchToSystem :: Synchronisation -> System
-synchToSystem synch = undefined
+synchToSystem synch = 
  S { boolVars = bVars -- :: Set.Set VariableName
-   , intVars = S.union iVars locVars -- :: Set.Set VariableName
-   , trans = undefined -- :: [TransitionRelation]
+   , intVars = S.unions [iVars, locVars, S.singleton eventVar] -- :: Set.Set VariableName
+   , trans = map (makeTransRels) (automata synch) 
    , System.init = undefined -- :: Predicate
    , safetyProp = PTop
    }
   where
-   bVars = S.fromList $ M.keys $ synchInits synch
-   iVars = undefined
+   -- variable sets
+   bVars = keySet $ synchInits synch
+   iVars = keySet $ synchDomains synch
    locVars = S.fromList $ map makeLocVar $ automata synch
+   -- helpers
    makeLocVar aut = IntVar $ Var $ (autName aut)++"_loc"
-   --getLocNo aut n = elemAt n $ locations aut
-   --findIndex loc (locations aut)
+   eventVar = IntVar $ Var $ "event"
+   eventIs ev =
+    P $ ILit Equals (IEVar eventVar)
+                    (IEConst (setIndex ev (allEvents synch)))
+   locationIs aut loc =
+    P $ ILit Equals (IEVar $ makeLocVar aut)
+                    (IEConst (setIndex loc (locations aut)))
+   setIndex x = fromIntegral . (S.findIndex x)
+   -- A collection of transition relations corresponding to the actions
+   -- available to one automaton
+   makeTransRels aut =
+    (map (makeTransRel' aut) (transitions aut)) ++ (allowInvisible aut)
+   -- A "transition" added to each automaton to allow it to do nothing while
+   -- another automaton executes local behaviour
+   allowInvisible aut = map invisibleEventTR (S.toList $ eventsNotIn aut)
+   invisibleEventTR ev = TR { guard = eventIs ev
+                            , nextRelation = PTop
+                            , intUpdates = []
+                            , nextGuard = PTop }
+   eventsNotIn aut = S.difference (allEvents synch) (events aut)
+   -- The transition of an automaton, extended to include locations and events
+   makeTransRel' aut at =
+    (formula at) { guard =
+                    PAnd [ guard (formula at)
+                         , locationIs aut (start at)
+                         , eventIs (event at)
+                         ]
+                 , intUpdates =
+                    (intUpdates (formula at)) ++
+                      [ ( makeLocVar aut
+                        , IEConst (setIndex (end at) (locations aut)))
+                      ] ++ -- unused variables just keep their old value
+                      (map noChange (unusedVars (intUpdates (formula at))))
+                 }
+   unusedVars updates = (S.toList iVars) \\ (usedVars updates)
+   usedVars updates = map fst updates
+   noChange iv = (iv, IEVar iv)
+   -- The initial state of the system
+   -- TODO: init
    
-      
+-- TODO: perhaps include guards enforcing the integer variable domains?
+   
+
+keySet :: (Ord a) => M.Map a b -> S.Set a
+keySet = S.fromList . M.keys
+
 
 
 

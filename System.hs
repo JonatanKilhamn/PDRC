@@ -141,7 +141,7 @@ data TransitionRelation
        -- intUpdates should have the current variable, not next
        , nextGuard :: Predicate
        }
- deriving ( Show, Eq )
+ deriving ( Show, Eq, Ord )
 
 makeCurrent :: Variable -> Variable
 makeCurrent (IV (IntVar v)) = (IV . IntVar) $ makeCurrent' v
