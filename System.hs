@@ -120,7 +120,9 @@ mapFst f (x,y) = (f x,y)
 data System
   = S { boolVars :: Set.Set BoolVariable
       , intVars :: Set.Set IntVariable
-      , trans :: [TransitionRelation]
+      , trans :: [[TransitionRelation]]
+      -- one transition relation out of each set must be true
+      -- i.e. this list of lists represents a conjunction of disjunctions
       , init :: Predicate
       , safetyProp :: Predicate
       }
@@ -179,7 +181,7 @@ isCurrent p = let vs = (allVarsInPred p) in vs == (Set.map makeCurrent vs)
 isSat :: System -> Bool
 isSat s = and [(length $ intVars s) == 0
               , Set.isSubsetOf transVarSet boolVarSet]
-  where transVarSet = Set.map makeCurrent $ Set.unions $ map allVarsInTransRel $ trans s
+  where transVarSet = Set.map makeCurrent $ Set.unions $ map allVarsInTransRel $ concat $ trans s
         boolVarSet = Set.map BV $ boolVars s
 
 

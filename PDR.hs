@@ -522,15 +522,15 @@ mkClause = mkPredicate . PAnd . (map P)
 mkTransRelation :: PDRZ3 AST
 mkTransRelation = do
   trs <- fmap (trans . system) get
-  let trans_pred = POr (map transRelationToPred trs)
+  let trans_pred = PAnd (map POr (map (map transRelationToPred) trs))
   mkPredicate trans_pred
- where intUpdateToPred (var, ie) =
-         P $ ILit Equals (next $ IEVar var) ie
-       transRelationToPred tr =
+ where transRelationToPred tr =
          PAnd $ [ System.guard tr
                 , nextRelation tr
                 , nextGuard tr
                 ] ++ map intUpdateToPred (intUpdates tr)
+       intUpdateToPred (var, ie) =
+         P $ ILit Equals (next $ IEVar var) ie
 
 
 
