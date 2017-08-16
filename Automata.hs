@@ -59,9 +59,9 @@ updateVarNames (AssignInt x exp) = union [x] (varNames exp)
 
 data Domain
   = Domain
-  { lower :: Int
-  , upper :: Int
-  , initial :: Int
+  { lower :: Integer
+  , upper :: Integer
+  , initial :: Integer
   }
   deriving ( Eq )
 
@@ -176,17 +176,17 @@ synchronise a s =
  -- not stable in order of synchronisation, in the case where
  -- two automata specify different domains for the same variable
 
-setDefault :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setDefault :: (IntVariable, Integer) -> Synchronisation -> Synchronisation
 setDefault (v, n) s =
   s {synchDomains = M.adjust (\d -> d {initial = n}) v (synchDomains s)
     }
 
-setRangeMax :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setRangeMax :: (IntVariable, Integer) -> Synchronisation -> Synchronisation
 setRangeMax (v, n) s =
   s {synchDomains = M.adjust (\d -> d {upper = n}) v (synchDomains s)
     }
 
-setRangeMin :: (IntVariable, Int) -> Synchronisation -> Synchronisation
+setRangeMin :: (IntVariable, Integer) -> Synchronisation -> Synchronisation
 setRangeMin (v, n) s =
   s {synchDomains = M.adjust (\d -> d {lower = n}) v (synchDomains s)
     }
@@ -227,11 +227,12 @@ synchToSystem synch =
  S { boolVars = bVars -- :: Set.Set VariableName
    , intVars = S.unions [iVars, locVars, S.singleton eventVar] -- :: Set.Set VariableName
    , trans = map (makeTransRels) (automata synch) 
-   , System.init = undefined -- :: Predicate
+   , System.init = makeInit -- :: Predicate
    , safetyProp = PTop
    }
   where
    -- variable sets
+   -- TODO: now we assume that all variables are present in synchInits and synchDomains, respectively. Re-write so that this assumption is dropped.
    bVars = keySet $ synchInits synch
    iVars = keySet $ synchDomains synch
    locVars = S.fromList $ map makeLocVar $ automata synch
@@ -275,8 +276,18 @@ synchToSystem synch =
    usedVars updates = map fst updates
    noChange iv = (iv, IEVar iv)
    -- The initial state of the system
-   -- TODO: init
-   
+   makeInit = PAnd $ initLocs ++ 
+                     initBoolVars ++
+                     initIntVars
+   initLocs = map (uncurry locationIs) [ (a,initialLocation a)
+                                       | a <- automata synch
+                                       ]
+   initBoolVars = [ P $ BLit bv b
+                  | (bv,b) <- M.toList $ synchInits synch ]
+   initIntVars =  [ P $ ILit Equals (IEVar iv) (IEConst $ initial d)
+                  | (iv,d) <- M.toList $ synchDomains synch ]
+      
+
 -- TODO: perhaps include guards enforcing the integer variable domains?
    
 
