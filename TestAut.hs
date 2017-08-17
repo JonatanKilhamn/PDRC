@@ -24,7 +24,8 @@ testAutA = Aut { autName = "Aut1"
                , marked = []
                , initialLocation = locA
                , uncontrollable = S.singleton "b"
-               , autDomains = M.empty
+               , intDomains = doms
+               , boolInits = M.empty
                } 
  where
   ts = [ downA
@@ -37,7 +38,7 @@ testAutA = Aut { autName = "Aut1"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(Var "acounter", IntConst 0)]
+           , intUpdates = [(acounter, IEConst 0)]
            , nextGuard = PTop }
       , end = locB
       }
@@ -47,7 +48,7 @@ testAutA = Aut { autName = "Aut1"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(Var "acounter", IntConst 0)]
+           , intUpdates = [(acounter, IEConst 0)]
            , nextGuard = PTop }
       , end = locA
       }  
@@ -56,15 +57,21 @@ testAutA = Aut { autName = "Aut1"
       , event = "c"
       , formula =
         TR { System.guard =
-               P (ILit Equals (IntVar $ Var "bcounter") (IntConst 1))
+               P (ILit Equals (IEVar $ bcounter) (IEConst 1))
            , nextRelation = PTop
-           , intUpdates = [(Var "acounter", IntConst 1)]
+           , intUpdates = [(IntVar $ Var "acounter", IEConst 1)]
            , nextGuard = PTop }
       , end = locB
       }  
   locA = "A1"
   locB = "A2"
-  
+  doms = M.fromList [ (acounter, Domain { initial = 0 })
+                    , (bcounter, Domain { initial = 0 })
+                    ]
+ 
+acounter, bcounter :: IntVariable 
+acounter = IntVar $ Var "acounter"
+bcounter = IntVar $ Var "bcounter"
   
 
 testAutB :: Automaton
@@ -74,7 +81,8 @@ testAutB = Aut { autName = "Aut2"
                , marked = []
                , initialLocation = locA
                , uncontrollable = S.singleton "b"
-               , autDomains = M.empty
+               , intDomains = M.empty
+               , boolInits = M.empty
                } 
  where
   ts = [ downB
@@ -86,7 +94,7 @@ testAutB = Aut { autName = "Aut2"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(Var "bcounter", IntConst 1)]
+           , intUpdates = [(bcounter, IEConst 1)]
            , nextGuard = PTop }
       , end = locB
       }
@@ -96,7 +104,7 @@ testAutB = Aut { autName = "Aut2"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(Var "bcounter", IntConst 0)]
+           , intUpdates = [(bcounter, IEConst 0)]
            , nextGuard = PTop }
       , end = locA
       }
