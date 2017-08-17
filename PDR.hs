@@ -275,7 +275,7 @@ emptyFrame :: Frame
 emptyFrame = Frame (S.empty)
 
 getMaxFrameIndex :: PDRZ3 Int
-getMaxFrameIndex = get >>= (return . (+1) . length . frames)
+getMaxFrameIndex = get >>= (return . (+ (-1)) . length . frames)
 
 
 updateFrames :: TimedCube -> PDRZ3 ()
@@ -405,7 +405,7 @@ mkPredicate' (P lit) = mkLiteral lit
 mkPredicate' (PNot p) = do
   (z . mkNot) =<< (mkPredicate p)
 mkPredicate' (PAnd ps) = do
-  (z . mkAnd) =<< (mapM mkPredicate ps)
+  (z . mkAnd) =<< (mapM mkPredicate (PTop : ps))
 mkPredicate' (POr ps) = do
   (z . mkOr) =<< (mapM mkPredicate ps)
 mkPredicate' (PTop) = z $ mkTrue
