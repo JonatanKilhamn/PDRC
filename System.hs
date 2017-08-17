@@ -2,7 +2,7 @@ module System where
 
 import qualified Data.Set as Set
 import qualified Data.Map as M
-import Data.Function
+import Data.List
 
 
 class Temporal a where
@@ -16,13 +16,22 @@ instance Show VariableName where
  show (Next v) = (show v)++"'"
 
 data BoolVariable = BoolVar VariableName
- deriving (Eq, Show, Ord)
+ deriving (Eq, Ord)
+instance Show BoolVariable where
+ show (BoolVar bv) = show bv
+
 
 data IntVariable = IntVar VariableName
- deriving (Eq, Show, Ord)
+ deriving (Eq, Ord)
+instance Show IntVariable where
+ show (IntVar vn) = show vn
 
 data Variable = BV BoolVariable | IV IntVariable
- deriving (Eq, Show, Ord)
+ deriving (Eq, Ord)
+instance Show Variable where
+ show (BV bv) = show bv
+ show (IV iv) = show iv
+
 
 instance Temporal VariableName where
   next = Next
@@ -36,7 +45,10 @@ instance Temporal Variable where
   next (IV iv) = IV $ next iv
 
 data Literal = BLit BoolVariable Bool | ILit BinaryPred (IntExpr) (IntExpr)
- deriving (Eq, Show, Ord)
+ deriving (Eq, Ord)
+instance Show Literal where
+ show (BLit bv b) = if b then (show bv) else "~"++show bv
+ show (ILit bp ie1 ie2) = show ie1 ++ show bp ++ show ie2
 
 instance Temporal Literal where
   next (BLit v b) = BLit (next v) b
@@ -52,7 +64,13 @@ data Predicate
   | PAnd [Predicate]
   | POr [Predicate]
   | PTop
-   deriving ( Eq, Show, Ord )
+   deriving ( Eq, Ord )
+instance Show Predicate where
+ show (P l) = show l
+ show (PNot p) = "~("++show p++")"
+ show (PAnd ps) = intercalate " ^ " (map show ps)
+ show (POr ps) = intercalate " v " (map show ps)
+ show (PTop) = "T"
 
 instance Temporal Predicate where
   next (P l) = P (next l)
@@ -65,7 +83,14 @@ data IntExpr
  | IEPlus (IntExpr) (IntExpr)
  | IEMinus (IntExpr) (IntExpr)
  | IEVar IntVariable
-  deriving ( Eq, Show, Ord)
+  deriving ( Eq, Ord)
+
+instance Show IntExpr where
+ show (IEConst i) = show i
+ show (IEPlus ie1 ie2) = show ie1 ++ " + " ++ show ie2
+ show (IEMinus ie1 ie2) = show ie1 ++ " - " ++ show ie2
+ show (IEVar iv) = show iv
+  
 
 instance Temporal IntExpr where
   next (IEVar iv) = IEVar $ next iv
@@ -126,6 +151,7 @@ data System
       , init :: Predicate
       , safetyProp :: Predicate
       }
+ deriving (Show, Eq, Ord)
 
 
 getAllVars :: System -> ([BoolVariable],[IntVariable])
@@ -141,8 +167,25 @@ data TransitionRelation
        -- intUpdates should have the current variable, not next
        , nextGuard :: Predicate
        }
- deriving ( Show, Eq, Ord )
-
+ deriving ( Eq, Ord )
+ 
+instance Show TransitionRelation where
+  show tr = let g = guard tr
+                nr = nextRelation tr
+                ng = nextGuard tr
+                iu = intUpdates tr
+   in unlines $
+    [ show g | not (g == PTop)
+    ] ++
+    [ show nr | not (nr == PTop)
+    ] ++
+    [ (show iv) ++ "' := " ++ (show ie)
+    | (iv, ie) <- iu
+    ] ++
+    [ show ng | not (ng == PTop)
+    ]
+    
+    
 makeCurrent :: Variable -> Variable
 makeCurrent (IV (IntVar v)) = (IV . IntVar) $ makeCurrent' v
 makeCurrent (BV (BoolVar v)) = (BV . BoolVar) $ makeCurrent' v

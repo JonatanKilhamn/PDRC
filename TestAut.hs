@@ -7,7 +7,7 @@ import qualified Data.Map as M
 
 import System
 import Automata
-
+import PDR
 
 --------------------------------------------------------------------------------
 -- Defining the automata
@@ -38,7 +38,7 @@ testAutA = Aut { autName = "Aut1"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(acounter, IEConst 0)]
+           , intUpdates = [(acounter, IEPlus (IEVar acounter) (IEConst 1))]
            , nextGuard = PTop }
       , end = locB
       }
@@ -65,8 +65,8 @@ testAutA = Aut { autName = "Aut1"
       }  
   locA = "A1"
   locB = "A2"
-  doms = M.fromList [ (acounter, Domain { initial = 0 })
-                    , (bcounter, Domain { initial = 0 })
+  doms = M.fromList [ (acounter, Domain { initial = 0, lower=0,upper=100})
+                    , (bcounter, Domain { initial = 0, lower=0,upper=100})
                     ]
  
 acounter, bcounter :: IntVariable 

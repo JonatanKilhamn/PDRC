@@ -12,12 +12,9 @@ import System
 
 --------------------
 
-ordNub :: (Ord a) => [a] -> [a]
-ordNub l = go S.empty l
-  where
-    go _ [] = []
-    go s (x:xs) = if x `S.member` s then go s xs
-                                    else x : go (S.insert x s) xs
+indent :: [String] -> [String]
+indent = concat . map (map ("  "++)) . map lines
+-- lines . (map ("  "++)) . unlines
 
 -- Only unary-encoded integer-valued state variables so far
 type Name = String
@@ -56,32 +53,37 @@ data Automaton
   , boolInits :: M.Map BoolVariable Bool
   }
   
-data AutTransition =
-  AT { start :: Location
-     , end :: Location
-     , formula :: TransitionRelation
-     , event :: Event }
- deriving ( Show, Eq )
-
 instance Show Automaton where
   show aut = unlines $
     [ "NAME: " ++ autName aut ] ++
     [ "TRANSITIONS:"
     | not (null (transitions aut))
-    ] ++
-    [ "  " ++ (show t)
+    ] ++ indent
+    [ (show t)
     | t <- transitions aut
     ] ++
     [ "MARKED:"
     | not (null (marked aut))
-    ] ++
-    [ "  " ++ show (l,p)
+    ] ++ indent
+    [ show (l,p)
     | (l,p) <- marked aut
     ] ++
     [ "INITIAL: " ++ (show $ initialLocation aut)
     ] ++
-    [ "UNCONTROLLABLE: " ++ (show $ uncontrollable aut)
+    [ "UNCONTROLLABLE: " ++ (show $ S.toList $ uncontrollable aut)
     ]
+
+data AutTransition =
+  AT { start :: Location
+     , end :: Location
+     , formula :: TransitionRelation
+     , event :: Event }
+ deriving ( Eq, Ord )
+
+instance Show AutTransition where
+  show at = unlines $
+    [ (start at) ++ " --(" ++ (event at) ++ ")-> " ++ (end at) ] ++ indent
+    [ show (formula at) ]
 
 data Synchronisation
   = Synch
@@ -93,7 +95,7 @@ data Synchronisation
 instance Show Synchronisation where
   show synch = unlines $
     [ "=== SYNCHRONISATION ==="] ++
-    [ "#AUTOMATA: " ++ (show $ length $ automata synch) ] ++
+    [ "#AUTOMATA: " ++ (show $ length $ automata synch) ++ "\n"] ++
     [ "AUT. No "++ (show i) ++ " " ++ (show a)
     | (a,i) <- zip (automata synch) [1..]
     ] ++
@@ -103,12 +105,10 @@ instance Show Synchronisation where
     [ "  " ++ name ++ ": " ++ (show var)
     | (name, var) <- M.assocs $ allVars synch
     ] ++--}
-    [ "UNCONTROLLABLE EVENTS: "
+    [ "ALL UNCONTROLLABLE EVENTS: "
     | not (null (getAllUncontrollable synch))
-    ] ++
-    [ "  " ++ name
-    | (name) <- S.toList $ getAllUncontrollable synch
-    ]
+    ] ++ indent
+    [ (show $ S.toList $ getAllUncontrollable synch) ]
 
 
 events :: Automaton -> S.Set Event
@@ -203,7 +203,7 @@ synchToSystem synch =
    , intVars = S.unions [iVars, locVars, S.singleton eventVar] -- :: Set.Set VariableName
    , trans = map (makeTransRels) (automata synch) 
    , System.init = makeInit -- :: Predicate
-   , safetyProp = PTop
+   , safetyProp = PNot PTop
    }
   where
    -- variable sets
