@@ -31,31 +31,6 @@ iePlus :: IntExpr -> IntExpr -> IntExpr
 iePlus (IEConst x) (IEConst y) = IEConst (x+y)
 iePlus a b = IEPlus a b
 
-{--varNames :: IntExpr -> [VarName]
-varNames (IntVar vn) = [vn]
-varNames (Plus ie1 ie2) = union (varNames ie1) (varNames ie2)
-varNames (Minus ie1 ie2) = union (varNames ie1) (varNames ie2)
-varNames _ = []
-
-guardVarName :: Guard -> VarName
-guardVarName (GInt _ x _) = x
-guardVarName (GNot g) = guardVarName g
-
-guardVarNames :: Guard -> [VarName]
-guardVarNames (GInt _ x exp) = union [x] (varNames exp)
-guardVarNames (GNot g) = guardVarNames g
-guardVarNames (GAnd gs) = foldl union [] (map guardVarNames gs)
-guardVarNames (GOr gs) = foldl union [] (map guardVarNames gs)
-guardVarNames Top = []
-guardVarNames Bottom = []
-
-
-updateVarName :: Update -> VarName
-updateVarName (AssignInt x _) = x
-
-updateVarNames :: Update -> [VarName]
-updateVarNames (AssignInt x exp) = union [x] (varNames exp)
---}
 
 data Domain
   = Domain
@@ -68,9 +43,7 @@ data Domain
 -- TODO: current structure does not prohibit one automaton
 -- from having several transitions from the same location,
 -- firing on the same event – i.e. nondeterminism. In the
--- circuit translation, such a situation would be treated
--- as an error, when two transitions try to update the same
--- location variable. 
+-- PDR algorithm, such systems would not behave correctly.
 data Automaton
   = Aut
   { autName :: Name
@@ -147,6 +120,9 @@ allEvents s = foldl S.union S.empty (map events $ automata s)
 allLocations :: Synchronisation -> S.Set Location
 allLocations s = foldl S.union S.empty (map locations $ automata s)
 
+-- TODO: add function similar to getAllVars, allowing us to know
+-- exactly which variables are present in each automaton without
+-- consulting the domain map
 {--
 getAllVars :: Automaton -> M.Map VarName Variable
 getAllVars a = M.fromList $ zip varNames (repeat unknownVar)
@@ -221,7 +197,6 @@ getAllUncontrollable =
 
 
 
--- TODO
 synchToSystem :: Synchronisation -> System
 synchToSystem synch = 
  S { boolVars = bVars -- :: Set.Set VariableName
