@@ -15,7 +15,9 @@ import PDR
 
 
 autSynch :: Synchronisation
-autSynch = (foldr synchronise emptySynch [testAutB, testAutA])
+--autSynch = let s = (foldr synchronise emptySynch [testAutB, testAutA]) in
+autSynch = let s = (foldr synchronise emptySynch [testAutA]) in
+  s { synchSafety = P $ ILit LessThan (IEVar $ acounter) (IEConst 3) }
 
 testAutA :: Automaton
 testAutA = Aut { autName = "Aut1"
@@ -23,20 +25,20 @@ testAutA = Aut { autName = "Aut1"
                , transitions = ts
                , marked = []
                , initialLocation = locA
-               , uncontrollable = S.singleton "b"
+               , uncontrollable = S.empty --S.singleton "b"
                , intDomains = doms
                , boolInits = M.empty
                } 
  where
   ts = [ downA
        , upA
-       , loopA
+       --, loopA
        ]
   downA =
    AT { start = locA
       , event = "a"
       , formula =
-        TR { System.guard = PTop
+        TR { System.guard = P $ ILit LessThan (IEVar $ acounter) (IEConst 2)
            , nextRelation = PTop
            , intUpdates = [(acounter, IEPlus (IEVar acounter) (IEConst 1))]
            , nextGuard = PTop }
@@ -44,11 +46,11 @@ testAutA = Aut { autName = "Aut1"
       }
   upA = 
    AT { start = locB
-      , event = "b"
+      , event = "a"
       , formula =
         TR { System.guard = PTop
            , nextRelation = PTop
-           , intUpdates = [(acounter, IEConst 0)]
+           , intUpdates = [(acounter, IEPlus (IEVar acounter) (IEConst 1))]
            , nextGuard = PTop }
       , end = locA
       }  
@@ -66,7 +68,7 @@ testAutA = Aut { autName = "Aut1"
   locA = "A1"
   locB = "A2"
   doms = M.fromList [ (acounter, Domain { initial = 0, lower=0,upper=100})
-                    , (bcounter, Domain { initial = 0, lower=0,upper=100})
+                    --, (bcounter, Domain { initial = 0, lower=0,upper=100})
                     ]
  
 acounter, bcounter :: IntVariable 
@@ -112,3 +114,8 @@ testAutB = Aut { autName = "Aut2"
   locB = "B2"
 
 
+----
+-- System
+
+testSys :: System
+testSys = synchToSystem autSynch

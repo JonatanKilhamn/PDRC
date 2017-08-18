@@ -8,13 +8,12 @@ import qualified Control.Monad as C
 import Control.Applicative
 import qualified Data.Set as S
 import Test.QuickCheck
+
 import System
+import Helpers
 
 --------------------
 
-indent :: [String] -> [String]
-indent = concat . map (map ("  "++)) . map lines
--- lines . (map ("  "++)) . unlines
 
 -- Only unary-encoded integer-valued state variables so far
 type Name = String
@@ -90,6 +89,7 @@ data Synchronisation
   { automata :: [Automaton]
   , synchDomains :: M.Map IntVariable Domain
   , synchInits :: M.Map BoolVariable Bool
+  , synchSafety :: Predicate
   }
 
 instance Show Synchronisation where
@@ -108,7 +108,13 @@ instance Show Synchronisation where
     [ "ALL UNCONTROLLABLE EVENTS: "
     | not (null (getAllUncontrollable synch))
     ] ++ indent
-    [ (show $ S.toList $ getAllUncontrollable synch) ]
+    [ (show $ S.toList $ getAllUncontrollable synch) ] ++
+    [ "SAFETY PROPERTY: "
+    | not (synchSafety synch == PTop)
+    ] ++ indent
+    [ (show $ synchSafety synch)
+    | not (synchSafety synch == PTop) ]
+    
 
 
 events :: Automaton -> S.Set Event
@@ -147,6 +153,7 @@ synchronise a s =
   s { automata = a:(automata s)
     , synchDomains = M.unionWith takeFirst (synchDomains s) (intDomains a)
     , synchInits = M.unionWith takeFirst (synchInits s) (boolInits a)
+    , synchSafety = synchSafety s
     }
  where takeFirst a b = a
  -- not stable in order of synchronisation, in the case where
@@ -179,7 +186,7 @@ emptySynch :: Synchronisation
 emptySynch = Synch {automata = []
                    , synchDomains = M.empty
                    , synchInits = M.empty
-                   --, synchLog = ""
+                   , synchSafety = PTop
                    }
 
 
@@ -203,7 +210,7 @@ synchToSystem synch =
    , intVars = S.unions [iVars, locVars, S.singleton eventVar] -- :: Set.Set VariableName
    , trans = map (makeTransRels) (automata synch) 
    , System.init = makeInit -- :: Predicate
-   , safetyProp = PNot PTop
+   , safetyProp = (synchSafety synch)
    }
   where
    -- variable sets
