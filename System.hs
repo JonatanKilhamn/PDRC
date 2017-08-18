@@ -128,7 +128,14 @@ pnot p = PNot p
 data Assignment = A { bvs :: M.Map BoolVariable Bool
                     , ivs :: M.Map IntVariable Integer
                     }
- deriving ( Eq, Show )
+ deriving ( Eq )
+
+instance Show Assignment where
+ show a = show $ PAnd
+  ( [ P (BLit bv b) | (bv,b) <- M.toList (bvs a) ] ++
+    [ P $ ILit Equals (IEVar iv) (IEConst i)
+    | (iv,i) <- M.toList (ivs a) ]
+  )
 
 removeVar :: Assignment -> Variable -> Assignment
 removeVar a (BV bv) = a { bvs = M.delete bv $ bvs a }
