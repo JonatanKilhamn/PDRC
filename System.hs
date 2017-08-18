@@ -65,11 +65,14 @@ data Predicate
   | POr [Predicate]
   | PTop
    deriving ( Eq, Ord )
+
 instance Show Predicate where
  show (P l) = show l
  show (PNot p) = "~("++show p++")"
- show (PAnd ps) = intercalate " ^ " (map show ps)
+ show (POr []) = "~T"
  show (POr ps) = intercalate " v " (map show ps)
+ show (PAnd []) = "T"
+ show (PAnd ps) = intercalate " ^ " (map show ps)
  show (PTop) = "T"
 
 instance Temporal Predicate where

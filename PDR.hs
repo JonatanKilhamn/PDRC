@@ -10,8 +10,10 @@ import qualified Data.Set as S
 import qualified Data.PQueue.Min as Q
 import Control.Monad.State.Lazy
 
+
 import Z3.Monad
 
+import Helpers
 import System
 ----------------
 
@@ -30,7 +32,10 @@ runPdr s = do
 pdr :: System -> PDRZ3 Bool
 pdr s = do
   putInitialSmtContext s
-  outerPdrLoop s
+  res <- outerPdrLoop s
+  c <- get
+  lg (show c)
+  return res
 
 
 -- Input: n::Int is iteration, which also corresponds to the highest frame index
@@ -38,7 +43,9 @@ outerPdrLoop :: System -> PDRZ3 Bool
 outerPdrLoop s = do
   failed <- blockAllBadStatesInLastFrame
   if (not failed)
-  then return False
+  then do
+    lg "Failed to block bad state"
+    return False
   else do
   addNewFrame
   success <- forwardPropagation
@@ -62,7 +69,9 @@ blockAllBadStatesInLastFrame = do
   putQueue $ priorityQueue (TC assignment n)
   failed <- blockEntireQueue
   if failed
-  then return False
+  then do
+    lg $ "failed to block; original bad state was " ++ (show assignment)
+    return False
   else blockAllBadStatesInLastFrame
 
 
@@ -119,6 +128,7 @@ forwardPropOneFrame k = do
   let (Frame nextClauses) = frs!!(k+1)
       nextClauses' = S.union nextClauses clausesToMove
       newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+1) frs)
+  c <- get
   put c { frames = newFrames }
   return (clauses == nextClauses')
  where try acc clause = do
@@ -149,6 +159,9 @@ unsafeStateQuery = do
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot p
     assert f_n
+    --lg $ show iv_asts
+    --lg $ show $ predMap c
+    --lg $ show p
     withModel $ \m ->
       evalBoolsAndInts m (bv_asts, iv_asts)
   let assignment = case maybeVals of (Nothing) -> Nothing
@@ -156,7 +169,7 @@ unsafeStateQuery = do
                                       A { bvs = maybeMap bvs maybeBools
                                         , ivs = maybeMap ivs maybeInts }
   return (res, assignment)
-
+  
 maybeMap :: Ord a => [a] -> [Maybe b] -> M.Map a b
 maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
  where f x (Nothing) = Nothing
@@ -166,7 +179,7 @@ maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
 evalBoolsAndInts m (as1,as2) = do
   maybes1 <- mapM (evalBool m) as1
-  maybes2 <- mapM (evalInt m) as1
+  maybes2 <- mapM (evalInt m) as2
   return (maybes1, maybes2)
 
 
@@ -195,7 +208,7 @@ consecutionQuery (TC ass k) = do
   let maybeAss = case maybeVals of (Nothing) -> Nothing
                                    (Just (maybeBools, maybeInts)) -> Just $
                                     A { bvs = maybeMap bvs'' maybeBools
-                                      , ivs = maybeMap ivs'' maybeInts }
+                                      , ivs = maybeMap ivs'' maybeInts } 
   return (res, maybeAss)
 
 -- Generalising an assignment which breaks the safety property in F_N
@@ -346,7 +359,35 @@ data SMTContext
   , prop :: AST
   , pdrlog :: String
   }
- deriving ( Eq, Ord, Show )
+ deriving ( Eq, Ord )
+ 
+instance Show SMTContext where
+  show c = unlines $
+    [ "=== PDR CONTEXT ==="] ++
+    --[ "SYSTEM:"] ++ indent
+    --[ show system c ]
+    [ "PREDICATES:"] ++ indent
+    [ show p
+    | (p,_) <- M.toList $ predMap c
+    ] ++
+    [ "INTEGER EXPR'S:"] ++ indent
+    [ show ie
+    | (ie,_) <- M.toList $ intExprMap c
+    ] ++
+    [ "LITERALS:"] ++ indent
+    [ show l
+    | (l,_) <- M.toList $ litMap c
+    ] ++
+    [ "VARIABLES:"] ++ indent
+    [ show v
+    | (v,_) <- M.toList $ varMap c
+    ] ++
+    [ "FRAMES:"] ++ indent
+    [ show fr
+    | fr <- frames c
+    ] ++
+    [ "PRIO-QUEUE:"] ++ indent
+    [ show $ prioQueue c ]
 
 
 emptyContext :: SMTContext
@@ -399,13 +440,16 @@ clauseToPredicate lits = POr (map P lits)
 
 mkPredicate :: Predicate -> PDRZ3 AST
 mkPredicate p = do
-  c <- get
-  let pm = predMap c
+  pm <- fmap predMap get
   let maybeAst = M.lookup p pm
-  case maybeAst of (Just ast) -> return ast
+  case maybeAst of (Just ast) -> do
+                    return ast
                    (Nothing) -> do
                     ast <- mkPredicate' p
                     let pm' = M.insert p ast pm
+                    --lg $ "just made " ++ show p
+                    --lg $ "now the map is " ++ show pm
+                    c <- get
                     put c {predMap = pm'}
                     return ast
 
@@ -416,7 +460,7 @@ mkPredicate' (PNot p) = do
 mkPredicate' (PAnd ps) = do
   (z . mkAnd) =<< (mapM mkPredicate (PTop : ps))
 mkPredicate' (POr ps) = do
-  (z . mkOr) =<< (mapM mkPredicate ps)
+  (z . mkOr) =<< (mapM mkPredicate (PNot PTop : ps))
 mkPredicate' (PTop) = z $ mkTrue
 
 mkLiteral :: Literal -> PDRZ3 AST
@@ -424,21 +468,18 @@ mkLiteral l = do
   lm <- fmap litMap get
   let maybeAst = M.lookup l lm
   case maybeAst of (Just ast) -> return ast
-                   (Nothing) -> mkLiteral' l
+                   (Nothing) -> do
+                     ast <- mkLiteral' l
+                     let lm' = M.insert l ast lm
+                     c <- get
+                     put c {litMap = lm'}
+                     return ast
+
 
 mkLiteral' :: Literal -> PDRZ3 AST
-mkLiteral' l = do
-  ast <- mkLiteral'' l
-  c <- get
-  let lm = litMap c
-  let lm' = M.insert l ast lm
-  put c {litMap = lm'}
-  return ast
-
-mkLiteral'' :: Literal -> PDRZ3 AST
-mkLiteral'' (BLit v b) = do
+mkLiteral' (BLit v b) = do
  (z . mkNot) =<< mkBoolVariable v
-mkLiteral'' (ILit bp e1 e2) = do
+mkLiteral' (ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
  z $ (zfunction bp) ast1 ast2
@@ -454,36 +495,44 @@ mkIntExpr ie = do
   iem <- fmap intExprMap get
   let maybeAst = M.lookup ie iem
   case maybeAst of (Just ast) -> return ast
-                   (Nothing) -> mkIntExpr' ie
+                   (Nothing) -> do
+                     ast <- mkIntExpr' ie
+                     let iem' = M.insert ie ast iem
+                     c <- get
+                     put c {intExprMap = iem'}
+                     return ast
+                   
 
 mkIntExpr' :: IntExpr -> PDRZ3 AST
-mkIntExpr' ie = do
-  ast <- mkIntExpr'' ie
-  c <- get
-  let iem = intExprMap c
-  let iem' = M.insert ie ast iem
-  put c {intExprMap = iem'}
-  return ast
-
-mkIntExpr'' :: IntExpr -> PDRZ3 AST
-mkIntExpr'' (IEConst n) = z $ mkIntNum n
-mkIntExpr'' (IEPlus ie1 ie2) = (z . mkAdd) =<< (mapM mkIntExpr [ie1, ie2])
-mkIntExpr'' (IEMinus ie1 ie2) = (z . mkSub) =<< (mapM mkIntExpr [ie1, ie2])
-mkIntExpr'' (IEVar v) = mkIntVariable v
+mkIntExpr' (IEConst n) = z $ mkIntNum n
+mkIntExpr' (IEPlus ie1 ie2) = (z . mkAdd) =<< (mapM mkIntExpr [ie1, ie2])
+mkIntExpr' (IEMinus ie1 ie2) = (z . mkSub) =<< (mapM mkIntExpr [ie1, ie2])
+mkIntExpr' (IEVar v) = mkIntVariable v
 
 mkBoolVariable :: BoolVariable -> PDRZ3 AST
 mkBoolVariable v = do
   vm <- fmap varMap get
   let maybeAst = M.lookup (BV v) vm
-  case maybeAst of (Just ast) -> return ast
-                   (Nothing) -> mkVariable (BV v)
+  case maybeAst of (Just a) -> return a
+                   (Nothing) -> do
+                     ast <- mkVariable (BV v)
+                     let vm' = M.insert (BV v) ast vm
+                     c <- get
+                     put c {varMap = vm'}
+                     return ast
+  
 
 mkIntVariable :: IntVariable -> PDRZ3 AST
 mkIntVariable v = do
   vm <- fmap varMap get
   let maybeAst = M.lookup (IV v) vm
   case maybeAst of (Just ast) -> return ast
-                   (Nothing) -> mkVariable (IV v)
+                   (Nothing) -> do
+                     ast <- mkVariable (IV v)
+                     let vm' = M.insert (IV v) ast vm
+                     c <- get
+                     put c {varMap = vm'}
+                     return ast
 
 
 mkVariable :: Variable -> PDRZ3 AST
