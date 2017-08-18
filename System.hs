@@ -69,9 +69,9 @@ data Predicate
 instance Show Predicate where
  show (P l) = show l
  show (PNot p) = "~("++show p++")"
- show (POr []) = "~T"
+ show (POr []) = "[~T]"
  show (POr ps) = intercalate " v " (map show ps)
- show (PAnd []) = "T"
+ show (PAnd []) = "[T]"
  show (PAnd ps) = intercalate " ^ " (map show ps)
  show (PTop) = "T"
 
