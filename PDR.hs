@@ -159,9 +159,6 @@ unsafeStateQuery = do
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot p
     assert f_n
-    --lg $ show iv_asts
-    --lg $ show $ predMap c
-    --lg $ show p
     withModel $ \m ->
       evalBoolsAndInts m (bv_asts, iv_asts)
   let assignment = case maybeVals of (Nothing) -> Nothing
@@ -236,10 +233,10 @@ generalise1 a = do
 checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
 checkLiteral a var = do
   -- Assume the modified assignment
-  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if ((BV v)==var) then b else not b)
+  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if ((BV v)==var) then not b else b)
                               | (v,b) <- M.toList $ bvs a
                               ] ++
-                              [ (if ((IV v)==var) then id else pnot) $
+                              [ (if ((IV v)==var) then pnot else id) $
                                  P $ ILit Equals (IEVar v) (IEConst (n))
                               | (v,n) <- M.toList $ ivs a
                               ]
