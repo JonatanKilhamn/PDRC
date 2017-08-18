@@ -24,6 +24,7 @@ zlocal = z . local
 runPdr :: System -> IO Bool
 runPdr s = do
   (res, finalState) <- evalZ3 $ runStateT (pdr s) (emptyContext)
+  putStr (pdrlog finalState)
   return res
 
 pdr :: System -> PDRZ3 Bool
@@ -62,8 +63,7 @@ blockAllBadStatesInLastFrame = do
   failed <- blockEntireQueue
   if failed
   then return False
-  else do
-  blockAllBadStatesInLastFrame
+  else blockAllBadStatesInLastFrame
 
 
 -- Returns: true when entire queue is blocked; false if property is disproven
@@ -82,7 +82,7 @@ blockEntireQueue = do
 
 -- Returns: false if property was disproven, true if state was blocked (or delegated)
 blockBadState :: TimedCube -> PDRZ3 Bool
-blockBadState (TC s k) =
+blockBadState (TC s k) = do
   if k == 0
   then return False
   else do
@@ -282,9 +282,8 @@ updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (TC s k) = do
   let clause = invertAssignment s
   c <- get
-  let newFrames = [ if (i < k) then (addTo fr clause) else fr
-                  | fr <- frames c
-                    , i <- [1..]
+  let newFrames = [ if (i > 0 && i < k) then (addTo fr clause) else fr
+                  | (fr,i) <- zip (frames c) [0..]
                   ]
   put $ c {frames = newFrames}
  where addTo (Init p) cl = (Init p)
@@ -296,7 +295,7 @@ updateFrames (TC s k) = do
 
 
 data TimedCube = TC Assignment Int
- deriving ( Eq )
+ deriving ( Eq, Show )
 
 instance Ord TimedCube where
  (TC a i) <= (TC b j) = i <= j
@@ -319,13 +318,15 @@ popMin = do
 queueInsert :: TimedCube -> PDRZ3 ()
 queueInsert tc = do
   queue <- fmap prioQueue get
-  putQueue $ Q.insert tc queue
+  --putQueue $ Q.insert tc queue
+  return ()
   
 
 
 
 -- Each clause is the negation of a (generalised) bad cube
 data Frame = Init Predicate | Frame (S.Set Clause)
+ deriving ( Eq, Ord, Show )
 
 type Clause = [Literal]
 
@@ -343,7 +344,9 @@ data SMTContext
   , frames :: [Frame] -- replace with M.Map Int Frame?
   , prioQueue :: PriorityQueue
   , prop :: AST
+  , pdrlog :: String
   }
+ deriving ( Eq, Ord, Show )
 
 
 emptyContext :: SMTContext
@@ -355,13 +358,14 @@ emptyContext = C { system = undefined
                  , frames = []
                  , prioQueue = Q.empty
                  , prop = undefined
+                 , pdrlog = ""
                  }
 
 putInitialSmtContext :: System -> PDRZ3 ()
 putInitialSmtContext s = do
   p <- getProp s
   c <- get
-  put $ c {system = s, prop = p, frames = [Init (System.init s)]} 
+  put $ c {system = s, prop = p, frames = [Init (System.init s), emptyFrame]} 
   return ()
 
 
@@ -372,6 +376,11 @@ putQueue q = do
 
 getProp :: System -> PDRZ3 AST
 getProp s = mkPredicate (safetyProp s)
+
+lg :: String -> PDRZ3 ()
+lg s = do
+  c <- get
+  put $ c { pdrlog = (pdrlog c) ++ s ++ "\n"}
 
 
 ------
