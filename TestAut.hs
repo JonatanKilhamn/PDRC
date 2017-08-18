@@ -14,9 +14,9 @@ import PDR
 --
 
 
-autSynch :: Synchronisation
+testSynch :: Synchronisation
 --autSynch = let s = (foldr synchronise emptySynch [testAutB, testAutA]) in
-autSynch = let s = (foldr synchronise emptySynch [testAutA]) in
+testSynch = let s = (foldr synchronise emptySynch [testAutA]) in
   s { synchSafety = P $ ILit LessThan (IEVar $ acounter) (IEConst 3) }
 
 testAutA :: Automaton
@@ -118,4 +118,4 @@ testAutB = Aut { autName = "Aut2"
 -- System
 
 testSys :: System
-testSys = synchToSystem autSynch
+testSys = synchToSystem testSynch
