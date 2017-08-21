@@ -41,13 +41,12 @@ pdr s = do
 -- Input: n::Int is iteration, which also corresponds to the highest frame index
 outerPdrLoop :: System -> PDRZ3 Bool
 outerPdrLoop s = do
-  failed <- blockAllBadStatesInLastFrame
+  failed <- blockAllBadStatesInLastFrame 0
   if (not failed)
   then do
     lg "Failed to block bad state"
     return False
   else do
-  addNewFrame
   success <- forwardPropagation
   if success
   then return True
@@ -55,24 +54,34 @@ outerPdrLoop s = do
   outerPdrLoop s
 
 
--- Input: k::Int, the current iteration
+-- Input i :: Int is a DEBUG parameter, to force termination when it would
+--  otherwise run forever. To be removed as soon as the underlying issue is
+--  fixed.
 -- Returns: false if property is disproved, true if all states could be blocked
-blockAllBadStatesInLastFrame :: PDRZ3 Bool
-blockAllBadStatesInLastFrame = do
+blockAllBadStatesInLastFrame :: Int -> PDRZ3 Bool
+blockAllBadStatesInLastFrame i = do
   let setup = undefined -- some setup surely needed
   n <- getMaxFrameIndex
   (res, maybeAssignment) <- unsafeStateQuery
   if (res == Unsat) -- There is no unsafe state in F_n
-  then return True
+  then do
+    lg "All bad states blocked – no more unsafe states found at this depth"
+    return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
   putQueue $ priorityQueue (TC assignment n)
-  failed <- blockEntireQueue
-  if failed
+  success <- blockEntireQueue
+  if (not success)
   then do
     lg $ "failed to block; original bad state was " ++ (show assignment)
     return False
-  else blockAllBadStatesInLastFrame
+  else do
+  if i>=5
+  then do
+  lg "DEBUG: breaking after 5 iteration of bABSILF"
+  return True
+  else do
+  blockAllBadStatesInLastFrame (i+1)
 
 
 -- Returns: true when entire queue is blocked; false if property is disproven
@@ -83,7 +92,10 @@ blockEntireQueue = do
   then return True
   else do
   t <- popMin
+  lg $ "Blocking bad state: "++show t
   success <- blockBadState t
+  lg $ "Blocking "++ if success then "succeeded" else "failed"
+  --lg =<< fmap (show . prioQueue) get 
   if (not success)
   then return False
   else do
@@ -112,8 +124,10 @@ blockBadState (TC s k) = do
 --   false if another iteration is needed
 forwardPropagation :: PDRZ3 Bool
 forwardPropagation = do
+  addNewFrame
   n <- getMaxFrameIndex
-  isFixedPoints <- mapM forwardPropOneFrame [2..(n-1)]
+  lg $ "Entered forward propagation, n=" ++ (show n)
+  isFixedPoints <- mapM forwardPropOneFrame [1..(n-1)]
   return $ or isFixedPoints
 
 -- Precondition: k>1
@@ -123,14 +137,14 @@ forwardPropOneFrame :: Int -> PDRZ3 Bool
 forwardPropOneFrame k = do
   c <- get
   let frs = frames c
-      (Frame clauses) = frs!!k
+  let (Frame clauses) = frs!!k
   clausesToMove <- foldM try (S.empty) clauses
   let (Frame nextClauses) = frs!!(k+1)
       nextClauses' = S.union nextClauses clausesToMove
-      newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+1) frs)
+      newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+2) frs)
   c <- get
   put c { frames = newFrames }
-  return (clauses == nextClauses')
+  return (newFrames!!k == newFrames!!(k+1))
  where try acc clause = do
         res <- tryForwardProp k clause
         let newAcc = (S.union (S.singleton clause) acc)
@@ -165,6 +179,7 @@ unsafeStateQuery = do
                                      (Just (maybeBools, maybeInts)) -> Just $
                                       A { bvs = maybeMap bvs maybeBools
                                         , ivs = maybeMap ivs maybeInts }
+  --lg $ show assignment
   return (res, assignment)
   
 maybeMap :: Ord a => [a] -> [Maybe b] -> M.Map a b
@@ -292,9 +307,10 @@ updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (TC s k) = do
   let clause = invertAssignment s
   c <- get
-  let newFrames = [ if (i > 0 && i < k) then (addTo fr clause) else fr
+  let newFrames = [ if (i > 0 && i <= k) then (addTo fr clause) else fr
                   | (fr,i) <- zip (frames c) [0..]
                   ]
+  c <- get
   put $ c {frames = newFrames}
  where addTo (Init p) cl = (Init p)
        addTo (Frame cls) cl =
@@ -444,8 +460,6 @@ mkPredicate p = do
                    (Nothing) -> do
                     ast <- mkPredicate' p
                     let pm' = M.insert p ast pm
-                    --lg $ "just made " ++ show p
-                    --lg $ "now the map is " ++ show pm
                     c <- get
                     put c {predMap = pm'}
                     return ast
@@ -602,3 +616,5 @@ testz = do
  --z $ assert nv
  z check
 
+
+-- TODO: look into lenses for updating c
