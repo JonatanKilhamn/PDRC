@@ -181,11 +181,6 @@ unsafeStateQuery = do
                                         , ivs = maybeMap ivs maybeInts }
   --lg $ show assignment
   return (res, assignment)
-  
-maybeMap :: Ord a => [a] -> [Maybe b] -> M.Map a b
-maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
- where f x (Nothing) = Nothing
-       f x (Just y) = Just (x,y)
 
 
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
@@ -604,8 +599,6 @@ mkTransRelation = do
 
 
 
-(+++) :: [a] -> a -> [a]
-list +++ elem = list ++ [elem]
 
 
 
