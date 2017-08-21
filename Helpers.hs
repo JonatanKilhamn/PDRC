@@ -14,3 +14,6 @@ maybeMap xs ys = M.fromList $ catMaybes $ zipWith f xs ys
 
 (+++) :: [a] -> a -> [a]
 list +++ elem = list ++ [elem]
+
+mapFst :: (a -> b) -> (a, c) -> (b, c)
+mapFst f (x,y) = (f x,y)

@@ -34,7 +34,7 @@ data Domain
   , upper :: Integer
   , initial :: Integer
   }
-  deriving ( Eq )
+  deriving ( Eq, Ord, Show )
 
 -- TODO: current structure does not prohibit one automaton
 -- from having several transitions from the same location,
@@ -126,15 +126,37 @@ allEvents s = foldl S.union S.empty (map events $ automata s)
 allLocations :: Synchronisation -> S.Set Location
 allLocations s = foldl S.union S.empty (map locations $ automata s)
 
--- TODO: add function similar to getAllVars, allowing us to know
--- exactly which variables are present in each automaton without
--- consulting the domain map
+findAllVars :: Automaton -> S.Set Variable
+findAllVars a = S.map makeCurrent $ S.union fromTrans fromMarked
+ where fromTrans = S.unions (map fromTrans' (transitions a))
+       fromTrans' at = fromTrans'' (formula at)
+       fromTrans'' tr = S.unions [ (allVarsInPred $ guard tr)
+                                 , (allVarsInPred $ nextGuard tr)
+                                 , (allVarsInPred $ nextRelation tr)
+                                 , S.fromList $
+                                    (map IV) . (map fst) $
+                                     intUpdates tr
+                                 , S.unions $
+                                    map (allVarsInExpr . snd) $
+                                     intUpdates tr
+                                 ]
+       fromMarked = S.unions (map (allVarsInPred . snd) (marked a))
+
+findBoolVars :: Automaton -> S.Set BoolVariable
+findBoolVars = (S.map toBV) . (S.filter isBV) . findAllVars
+ where toBV (BV v) = v
+
+findIntVars :: Automaton -> S.Set IntVariable
+findIntVars = (S.map toIV) . (S.filter isIV) . findAllVars
+ where toIV (IV v) = v
+
+
 {--
-getAllVars :: Automaton -> M.Map VarName Variable
-getAllVars a = M.fromList $ zip varNames (repeat unknownVar)
- where varNames = ordNub $ concat $ map varNames' (transitions a)
-       varNames' t = concat $ (map guardVarNames (guards t)) ++ (map updateVarNames (updates t))
-       unknownVar = Variable {lower = 0, upper = 3, initial = 0}
+  = TR { guard :: Predicate
+       , nextRelation :: Predicate
+       , intUpdates :: [(IntVariable, IntExpr)]
+       -- intUpdates should have the current variable, not next
+       , nextGuard :: Predicate
 --}
 
 setUncontrollable :: (Event, Bool) -> Automaton -> Automaton
@@ -202,6 +224,15 @@ getAllUncontrollable :: Synchronisation -> S.Set Event
 getAllUncontrollable =
  (foldr S.union S.empty) . (map uncontrollable) . automata
 
+getBoolVariables :: Synchronisation -> S.Set BoolVariable
+getBoolVariables synch = S.unions $
+ (keySet $ synchInits synch) :
+ map findBoolVars (automata synch)
+
+getIntVariables :: Synchronisation -> S.Set IntVariable
+getIntVariables synch = S.unions $
+ (keySet $ synchDomains synch) :
+ map findIntVars (automata synch)
 
 
 synchToSystem :: Synchronisation -> System
@@ -215,8 +246,8 @@ synchToSystem synch =
   where
    -- variable sets
    -- TODO: now we assume that all variables are present in synchInits and synchDomains, respectively. Re-write so that this assumption is dropped.
-   bVars = keySet $ synchInits synch
-   iVars = keySet $ synchDomains synch
+   bVars = getBoolVariables synch
+   iVars = getIntVariables synch
    locVars = S.fromList $ map makeLocVar $ automata synch
    -- helpers
    makeLocVar aut = IntVar $ Var $ (autName aut)++"_loc"

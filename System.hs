@@ -4,6 +4,7 @@ import qualified Data.Set as Set
 import qualified Data.Map as M
 import Data.List
 
+import Helpers
 
 class Temporal a where
     next :: a -> a
@@ -32,6 +33,11 @@ instance Show Variable where
  show (BV bv) = show bv
  show (IV iv) = show iv
 
+isBV, isIV :: Variable -> Bool
+isBV (BV _) = True
+isBV _ = False
+isIV (IV _) = True
+isIV _ = False
 
 instance Temporal VariableName where
   next = Next
@@ -148,8 +154,12 @@ instance Temporal Assignment where
 updateKeys :: (Ord k, Ord k2) => M.Map k v -> (k -> k2) -> M.Map k2 v
 updateKeys m fun = M.fromList $ map (mapFst fun) $ M.toList m
 
-mapFst :: (a -> b) -> (a, c) -> (b, c)
-mapFst f (x,y) = (f x,y)
+setTo :: BoolVariable -> Bool -> Predicate
+setTo bv b = next $ bvIs bv b
+
+bvIs :: BoolVariable -> Bool -> Predicate
+bvIs bv b = P $ BLit bv b
+
 
 
 data System
@@ -209,6 +219,16 @@ allVarsInPred (P lit) = allVarsInLit lit
 allVarsInPred (PNot p) = allVarsInPred p
 allVarsInPred (POr ps) = Set.unions $ map allVarsInPred ps
 allVarsInPred (PAnd ps) = Set.unions $ map allVarsInPred ps
+allVarsInPred PTop = Set.empty
+
+boolVarsInPred :: Predicate -> Set.Set BoolVariable
+boolVarsInPred p = Set.map toBV $ Set.filter isBV $ allVarsInPred p
+ where toBV (BV v) = v
+
+intVarsInPred :: Predicate -> Set.Set IntVariable
+intVarsInPred p = Set.map toIV $ Set.filter isBV $ allVarsInPred p
+ where toIV (IV v) = v
+
 
 allVarsInLit :: Literal -> Set.Set Variable
 allVarsInLit (BLit bv _) = Set.singleton (BV bv)
