@@ -69,11 +69,12 @@ blockAllBadStatesInLastFrame i = do
     return True
   else do
   assignment <- generalise1 (fromJust maybeAssignment)
+  lg $ "Generalised assignment: " ++ show assignment
   putQueue $ priorityQueue (TC assignment n)
   success <- blockEntireQueue
   if (not success)
   then do
-    lg $ "failed to block; original bad state was " ++ (show assignment)
+    lg $ "Failed to block; original bad state was " ++ (show assignment)
     return False
   else do
   if i>=5
@@ -89,7 +90,9 @@ blockEntireQueue :: PDRZ3 Bool
 blockEntireQueue = do
   queue <- fmap prioQueue get
   if (Q.null queue)
-  then return True
+  then do
+  lg "Queue is empty, finished blocking step"
+  return True
   else do
   t <- popMin
   lg $ "Blocking bad state: "++show t
@@ -111,8 +114,10 @@ blockBadState (TC s k) = do
   if (res == Sat)
   then do
     m <- generalise2 (fromJust maybeAssignment) (TC s k)
+    lg $ "Found bad predecessor cube: " ++ show (TC m (k-1))
     mapM_ queueInsert [TC m (k-1), TC s k]
   else do
+    lg "Bad cubed blocked."
     updateFrames (TC s k)
     n <- getMaxFrameIndex
     when (k < n) (queueInsert (TC s (k+1)))
@@ -237,19 +242,21 @@ generalise1 a = do
  where
   generalise1once ass var = do
    redundant <- checkLiteral ass var
+   lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
 
 -- Checks one literal to see if it can be removed from the assignment
 checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
 checkLiteral a var = do
   -- Assume the modified assignment
-  ast <- mkPredicate $ PAnd $ [ P $ BLit v (if ((BV v)==var) then not b else b)
+  let pred =           PAnd $ [ P $ BLit v (if ((BV v)==var) then not b else b)
                               | (v,b) <- M.toList $ bvs a
                               ] ++
                               [ (if ((IV v)==var) then pnot else id) $
                                  P $ ILit Equals (IEVar v) (IEConst (n))
                               | (v,n) <- M.toList $ ivs a
                               ]
+  ast <- mkPredicate pred
   res <- zlocal $ do
    assert ast
    check
@@ -307,6 +314,8 @@ updateFrames (TC s k) = do
                   ]
   c <- get
   put $ c {frames = newFrames}
+  lg $ "Updated frames: "
+  lg $ show newFrames
  where addTo (Init p) cl = (Init p)
        addTo (Frame cls) cl =
          -- TODO: subsumption check
@@ -339,7 +348,7 @@ popMin = do
 queueInsert :: TimedCube -> PDRZ3 ()
 queueInsert tc = do
   queue <- fmap prioQueue get
-  --putQueue $ Q.insert tc queue
+  putQueue $ Q.insert tc queue
   return ()
   
 
@@ -454,8 +463,9 @@ mkPredicate p = do
                     return ast
                    (Nothing) -> do
                     ast <- mkPredicate' p
-                    let pm' = M.insert p ast pm
                     c <- get
+                    let pm = predMap c
+                    let pm' = M.insert p ast pm
                     put c {predMap = pm'}
                     return ast
 
@@ -484,7 +494,8 @@ mkLiteral l = do
 
 mkLiteral' :: Literal -> PDRZ3 AST
 mkLiteral' (BLit v b) = do
- (z . mkNot) =<< mkBoolVariable v
+   v_ast <- mkBoolVariable v
+   z $ if b then return v_ast else mkNot v_ast
 mkLiteral' (ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
@@ -503,8 +514,9 @@ mkIntExpr ie = do
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> do
                      ast <- mkIntExpr' ie
-                     let iem' = M.insert ie ast iem
                      c <- get
+                     let iem = intExprMap c
+                     let iem' = M.insert ie ast iem
                      put c {intExprMap = iem'}
                      return ast
                    
@@ -522,8 +534,9 @@ mkBoolVariable v = do
   case maybeAst of (Just a) -> return a
                    (Nothing) -> do
                      ast <- mkVariable (BV v)
-                     let vm' = M.insert (BV v) ast vm
                      c <- get
+                     let vm = varMap c
+                     let vm' = M.insert (BV v) ast vm
                      put c {varMap = vm'}
                      return ast
   
@@ -535,8 +548,9 @@ mkIntVariable v = do
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> do
                      ast <- mkVariable (IV v)
-                     let vm' = M.insert (IV v) ast vm
                      c <- get
+                     let vm = varMap c
+                     let vm' = M.insert (IV v) ast vm
                      put c {varMap = vm'}
                      return ast
 
