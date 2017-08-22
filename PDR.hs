@@ -197,30 +197,34 @@ evalBoolsAndInts m (as1,as2) = do
 
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
 consecutionQuery (TC ass k) = do
+  lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
   c <- get
   let p = prop c
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
   -- TODO: use the substitution part of the trans relation
-  -- Right now the bad cube (assignment) includes next-state variables as well.
+  -- Commented-out: bad cube (assignment) includes next-state variables as well
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
-      (bvs', ivs') = (map next bvs, map next ivs)
-      (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
-  bv_asts <- mapM mkBoolVariable bvs''
-  iv_asts <- mapM mkIntVariable ivs''
+      --(bvs', ivs') = (map next bvs, map next ivs)
+      --(bvs'', ivs'') = (bvs++bvs', ivs++ivs')
+  bv_asts <- mapM mkBoolVariable bvs --bvs''
+  iv_asts <- mapM mkIntVariable ivs --ivs''
   -- Assertions and actual SAT check:
   (res, maybeVals) <- zlocal $ do
-    assert s
-    assert =<< mkNot s'
+    assert =<< mkNot s
+    assert s'
     assert f_kminus1
     withModel $ \m ->
       (evalBoolsAndInts m) (bv_asts, iv_asts)
   let maybeAss = case maybeVals of (Nothing) -> Nothing
                                    (Just (maybeBools, maybeInts)) -> Just $
-                                    A { bvs = maybeMap bvs'' maybeBools
-                                      , ivs = maybeMap ivs'' maybeInts } 
+                                    --A { bvs = maybeMap bvs'' maybeBools
+                                    --  , ivs = maybeMap ivs'' maybeInts } 
+                                    A { bvs = maybeMap bvs maybeBools
+                                      , ivs = maybeMap ivs maybeInts } 
+  lg $ show maybeAss
   return (res, maybeAss)
 
 -- Generalising an assignment which breaks the safety property in F_N
@@ -290,6 +294,7 @@ generalise2 a (TC ass k) = do
  where
   generalise2once ass var = do
    redundant <- checkLiteral ass var
+   lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
 
 addNewFrame :: PDRZ3 ()
