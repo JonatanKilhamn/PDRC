@@ -17,6 +17,9 @@ import Helpers
 import System
 ----------------
 
+debug :: Bool
+debug = False
+
 
 type PDRZ3 = StateT SMTContext Z3
 
@@ -32,15 +35,15 @@ runPdr s = do
 pdr :: System -> PDRZ3 Bool
 pdr s = do
   putInitialSmtContext s
-  res <- outerPdrLoop s
+  res <- outerPdrLoop 0 s
   c <- get
   lg (show c)
   return res
 
 
--- Input: n::Int is iteration, which also corresponds to the highest frame index
-outerPdrLoop :: System -> PDRZ3 Bool
-outerPdrLoop s = do
+-- Input i :: Int is a DEBUG parameter, to force termination when it would
+outerPdrLoop :: Int -> System -> PDRZ3 Bool
+outerPdrLoop i s = do
   failed <- blockAllBadStatesInLastFrame 0
   if (not failed)
   then do
@@ -51,7 +54,12 @@ outerPdrLoop s = do
   if success
   then return True
   else do
-  outerPdrLoop s
+  if (debug && i>=5)
+  then do
+  lg "DEBUG: breaking after 5 iteration of outerPdrLoop"
+  return True
+  else do
+  outerPdrLoop (i+1) s
 
 
 -- Input i :: Int is a DEBUG parameter, to force termination when it would
@@ -71,23 +79,23 @@ blockAllBadStatesInLastFrame i = do
   assignment <- generalise1 (fromJust maybeAssignment)
   lg $ "Generalised assignment: " ++ show assignment
   putQueue $ priorityQueue (TC assignment n)
-  success <- blockEntireQueue
+  success <- blockEntireQueue 0
   if (not success)
   then do
     lg $ "Failed to block; original bad state was " ++ (show assignment)
     return False
   else do
-  if i>=5
+  if (debug && i>=5)
   then do
   lg "DEBUG: breaking after 5 iteration of bABSILF"
   return True
   else do
   blockAllBadStatesInLastFrame (i+1)
 
-
+-- Input i :: Int is a DEBUG parameter, to force termination when it would
 -- Returns: true when entire queue is blocked; false if property is disproven
-blockEntireQueue :: PDRZ3 Bool
-blockEntireQueue = do
+blockEntireQueue :: Int -> PDRZ3 Bool
+blockEntireQueue i = do
   queue <- fmap prioQueue get
   if (Q.null queue)
   then do
@@ -97,12 +105,17 @@ blockEntireQueue = do
   t <- popMin
   lg $ "Blocking bad state: "++show t
   success <- blockBadState t
-  lg $ "Blocking "++ if success then "succeeded" else "failed"
+  --lg $ "Blocking "++ if success then "succeeded" else "failed"
   --lg =<< fmap (show . prioQueue) get 
   if (not success)
   then return False
   else do
-  blockEntireQueue
+  if (debug && i>=10)
+  then do
+  lg "DEBUG: breaking after 10 iteration of bEQ"
+  return True
+  else do
+  blockEntireQueue (i+1)
 
 -- Returns: false if property was disproven, true if state was blocked (or delegated)
 blockBadState :: TimedCube -> PDRZ3 Bool
@@ -114,7 +127,7 @@ blockBadState (TC s k) = do
   if (res == Sat)
   then do
     m <- generalise2 (fromJust maybeAssignment) (TC s k)
-    lg $ "Found bad predecessor cube: " ++ show (TC m (k-1))
+    lg $ "Found bad predecessor cube: " ++ show m ++ " at frame " ++ show (k-1)
     mapM_ queueInsert [TC m (k-1), TC s k]
   else do
     lg "Bad cubed blocked."
@@ -207,15 +220,16 @@ consecutionQuery (TC ass k) = do
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
-      --(bvs', ivs') = (map next bvs, map next ivs)
-      --(bvs'', ivs'') = (bvs++bvs', ivs++ivs')
+      (bvs', ivs') = (map next bvs, map next ivs)
+      (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
   bv_asts <- mapM mkBoolVariable bvs --bvs''
-  iv_asts <- mapM mkIntVariable ivs --ivs''
+  iv_asts <- mapM mkIntVariable ivs -- ivs''
   -- Assertions and actual SAT check:
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot s
     assert s'
     assert f_kminus1
+    assert t
     withModel $ \m ->
       (evalBoolsAndInts m) (bv_asts, iv_asts)
   let maybeAss = case maybeVals of (Nothing) -> Nothing
@@ -236,22 +250,21 @@ generalise1 a = do
   n <- getMaxFrameIndex
   f_n <- mkFrame n
   z push
-  -- Assume the frame and safety property:
+  -- Assume the frame:
   z $ assert f_n  
-  z $ assert p
   -- Try the assignment once for each variable:
-  a' <- foldM generalise1once a vars
+  a' <- foldM (generalise1once p) a vars
   z $ pop 1
   return a'
  where
-  generalise1once ass var = do
-   redundant <- checkLiteral ass var
+  generalise1once consequent ass var = do
+   redundant <- checkLiteral consequent ass var
    lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
 
 -- Checks one literal to see if it can be removed from the assignment
-checkLiteral :: Assignment -> Variable -> PDRZ3 Bool
-checkLiteral a var = do
+checkLiteral :: AST -> Assignment -> Variable -> PDRZ3 Bool
+checkLiteral consequent a var = do
   -- Assume the modified assignment
   let pred =           PAnd $ [ P $ BLit v (if ((BV v)==var) then not b else b)
                               | (v,b) <- M.toList $ bvs a
@@ -261,10 +274,27 @@ checkLiteral a var = do
                               | (v,n) <- M.toList $ ivs a
                               ]
   ast <- mkPredicate pred
+  -- Assert the modified assignment and the unwanted consequent:
   res <- zlocal $ do
+   assert consequent
    assert ast
    check
-  return (res == Unsat)
+  if (res==Sat)
+  -- Changing this variable allowed us to reach the unwanted consequent
+  --  => this var is not redundant
+  then return False
+  else do
+  -- Changing this var did not allow us to reach the consequent
+  -- But the variable might still not be redundant
+  -- Assert the negation of the consequent:
+  res <- zlocal $ do
+   assert =<< mkNot consequent
+   assert ast
+   check
+  -- If Sat, even with this variable changed we can fulfil the original
+  -- purpose of the assignment (reaching the negation of the consequent)
+  -- and so it is redundant
+  return (res==Sat)
 
 
 -- Generalising an assignment which breaks consecution of another property !s
@@ -275,6 +305,7 @@ generalise2 a (TC ass k) = do
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
+  not_s' <- z $ mkNot s'
   -- TODO: change the mkTransRelation to use the substitution technique for
   --  integer variables.
   trans_kminus1 <- mkTransRelation
@@ -285,15 +316,15 @@ generalise2 a (TC ass k) = do
   z $ do
     assert f_kminus1
     assert =<< mkNot s
-    assert =<< mkNot s'
+    --assert =<< mkNot s'
     assert trans_kminus1
   -- Try the assignment once for each variable:
-  a' <- foldM generalise2once a vars
+  a' <- foldM (generalise2once not_s') a vars
   z $ pop 1
   return a'
  where
-  generalise2once ass var = do
-   redundant <- checkLiteral ass var
+  generalise2once consequent ass var = do
+   redundant <- checkLiteral consequent ass var
    lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
 

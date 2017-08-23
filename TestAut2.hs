@@ -17,7 +17,7 @@ import PDR
 testSynch :: Synchronisation
 --autSynch = let s = (foldr synchronise emptySynch [testAutB, testAutA]) in
 testSynch = let s = (foldr synchronise emptySynch [testAutA]) in
-  s { synchSafety = PAnd [bvIs flag_a True, pnot $ bvIs flag_b True] }
+  s { synchSafety = PAnd [pnot $ bvIs flag_b True] }
 
 testAutA :: Automaton
 testAutA = Aut { autName = "Aut1"
@@ -27,7 +27,7 @@ testAutA = Aut { autName = "Aut1"
                , initialLocation = locA
                , uncontrollable = S.empty --S.singleton "b"
                , intDomains = M.empty
-               , boolInits = M.empty
+               , boolInits = M.fromList [(flag_a, False), (flag_b, False)]
                } 
  where
   ts = [ downA
@@ -41,7 +41,7 @@ testAutA = Aut { autName = "Aut1"
         TR { System.guard = PTop
            , nextRelation = PTop
            , intUpdates = []
-           , nextGuard = setTo flag_b True }
+           , nextGuard = setTo flag_a True }
       , end = locB
       }
   upA = 
@@ -51,7 +51,7 @@ testAutA = Aut { autName = "Aut1"
         TR { System.guard = bvIs flag_a True
            , nextRelation = PTop
            , intUpdates = []
-           , nextGuard = setTo flag_a False}
+           , nextGuard = setTo flag_b True}
       , end = locA
       }  
 

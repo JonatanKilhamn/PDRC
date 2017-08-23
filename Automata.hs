@@ -51,6 +51,7 @@ data Automaton
   , intDomains :: M.Map IntVariable Domain
   , boolInits :: M.Map BoolVariable Bool
   }
+ deriving ( Eq, Ord )
   
 instance Show Automaton where
   show aut = unlines $
@@ -86,7 +87,7 @@ instance Show AutTransition where
 
 data Synchronisation
   = Synch
-  { automata :: [Automaton]
+  { automata :: S.Set Automaton
   , synchDomains :: M.Map IntVariable Domain
   , synchInits :: M.Map BoolVariable Bool
   , synchSafety :: Predicate
@@ -97,7 +98,7 @@ instance Show Synchronisation where
     [ "=== SYNCHRONISATION ==="] ++
     [ "#AUTOMATA: " ++ (show $ length $ automata synch) ++ "\n"] ++
     [ "AUT. No "++ (show i) ++ " " ++ (show a)
-    | (a,i) <- zip (automata synch) [1..]
+    | (a,i) <- zip (S.toList $ automata synch) [1..]
     ] ++
     {--[ "ALL VARIABLES IN SYNCH: "
     | not (null (allVars synch))
@@ -121,10 +122,10 @@ events :: Automaton -> S.Set Event
 events a = S.fromList $ map event (transitions a)
 
 allEvents :: Synchronisation -> S.Set Event
-allEvents s = foldl S.union S.empty (map events $ automata s)
+allEvents s = foldl S.union S.empty (S.map events $ automata s)
 
 allLocations :: Synchronisation -> S.Set Location
-allLocations s = foldl S.union S.empty (map locations $ automata s)
+allLocations s = foldl S.union S.empty (S.map locations $ automata s)
 
 findAllVars :: Automaton -> S.Set Variable
 findAllVars a = S.map makeCurrent $ S.union fromTrans fromMarked
@@ -172,7 +173,7 @@ setUncontrollable (e,b) aut =
 
 synchronise :: Automaton -> Synchronisation -> Synchronisation
 synchronise a s =
-  s { automata = a:(automata s)
+  s { automata = S.insert a (automata s)
     , synchDomains = M.unionWith takeFirst (synchDomains s) (intDomains a)
     , synchInits = M.unionWith takeFirst (synchInits s) (boolInits a)
     , synchSafety = synchSafety s
@@ -205,7 +206,7 @@ setDomains ds s = foldr (setDomain) s ds
 
 
 emptySynch :: Synchronisation
-emptySynch = Synch {automata = []
+emptySynch = Synch {automata = S.empty
                    , synchDomains = M.empty
                    , synchInits = M.empty
                    , synchSafety = PTop
@@ -214,7 +215,7 @@ emptySynch = Synch {automata = []
 
 setEventUncontrollable :: Event -> Synchronisation -> Synchronisation
 setEventUncontrollable e s =
- s {automata = map (setUncontrollable (e,True)) (automata s)}
+ s {automata = S.map (setUncontrollable (e,True)) (automata s)}
 
 isEventUncontrollable :: Event -> Synchronisation -> Bool
 isEventUncontrollable e =
@@ -222,35 +223,44 @@ isEventUncontrollable e =
 
 getAllUncontrollable :: Synchronisation -> S.Set Event
 getAllUncontrollable =
- (foldr S.union S.empty) . (map uncontrollable) . automata
+ (foldr S.union S.empty) . (S.map uncontrollable) . automata
 
 getBoolVariables :: Synchronisation -> S.Set BoolVariable
-getBoolVariables synch = S.unions $
- (keySet $ synchInits synch) :
- map findBoolVars (automata synch)
+getBoolVariables synch = foldl S.union S.empty $
+ S.insert (keySet $ synchInits synch) $
+ S.map findBoolVars (automata synch)
 
 getIntVariables :: Synchronisation -> S.Set IntVariable
-getIntVariables synch = S.unions $
- (keySet $ synchDomains synch) :
- map findIntVars (automata synch)
+getIntVariables synch = foldl S.union S.empty $
+ S.insert (keySet $ synchDomains synch) $
+ S.map findIntVars (automata synch)
 
 
 synchToSystem :: Synchronisation -> System
 synchToSystem synch = 
- S { boolVars = bVars -- :: Set.Set VariableName
-   , intVars = S.unions [iVars, locVars, S.singleton eventVar] -- :: Set.Set VariableName
-   , trans = map (makeTransRels) (automata synch) 
+ S { boolVars = bVars
+   , intVars = S.unions [ iVars
+                        , locVars ]
+   , auxVars = S.unions [ S.map IV updatedByTrackers
+                        , S.singleton (IV eventVar) ]
+   , trans = S.toList $
+      S.union (S.map makeTransRels (automata synch))
+              (S.map makeUpdateTransRels allVars)
    , System.init = makeInit -- :: Predicate
    , safetyProp = (synchSafety synch)
    }
   where
    -- variable sets
-   -- TODO: now we assume that all variables are present in synchInits and synchDomains, respectively. Re-write so that this assumption is dropped.
    bVars = getBoolVariables synch
    iVars = getIntVariables synch
-   locVars = S.fromList $ map makeLocVar $ automata synch
+   allVars = S.foldl S.union S.empty $ S.map findAllVars $ automata synch
+   locVars = S.map makeLocVar $ automata synch
+   updatedByTrackers = S.map makeUpdatedByTracker allVars
+   isUpdatedTrackers = S.map makeIsUpdatedTracker allVars
    -- helpers
    makeLocVar aut = IntVar $ Var $ (autName aut)++"_loc"
+   makeIsUpdatedTracker v = BoolVar $ Var $ (varName v)++"_is_updated"
+   makeUpdatedByTracker v = IntVar $ Var $ (varName v)++"_updated_by"
    eventVar = IntVar $ Var $ "event"
    eventIs ev =
     P $ ILit Equals (IEVar eventVar)
@@ -258,7 +268,6 @@ synchToSystem synch =
    locationIs aut loc =
     P $ ILit Equals (IEVar $ makeLocVar aut)
                     (IEConst (setIndex loc (locations aut)))
-   setIndex x = fromIntegral . (S.findIndex x)
    -- A collection of transition relations corresponding to the actions
    -- available to one automaton
    makeTransRels aut =
@@ -274,38 +283,66 @@ synchToSystem synch =
    -- The transition of an automaton, extended to include locations and events
    makeTransRel' aut at =
     (formula at) { guard =
-                    PAnd [ guard (formula at)
-                         , locationIs aut (start at)
-                         , eventIs (event at)
-                         ]
+                    PAnd $ [ guard (formula at)
+                           , locationIs aut (start at)
+                           , eventIs (event at)
+                           ] ++
+                           [ (if (isUpdated v at) then id else pnot) $
+                              ivIs (makeUpdatedByTracker v)
+                                   (setIndex aut (automata synch))
+                           | v <- S.toList allVars ]
                  , intUpdates =
                     (intUpdates (formula at)) ++
                       [ ( makeLocVar aut
                         , IEConst (setIndex (end at) (locations aut)))
-                      ] ++ -- unused variables just keep their old value
-                      (map noChange (unusedVars (intUpdates (formula at))))
+                      ]
                  }
-   unusedVars updates = (S.toList iVars) \\ (usedVars updates)
-   usedVars updates = map fst updates
-   noChange iv = (iv, IEVar iv)
+   isUpdated v at = elem v (updatedVars (formula at))
+   updatedVars tr = union
+    (S.toList $ S.map makeCurrent $ allVarsInPred (nextGuard tr))
+    (map (IV . fst) (intUpdates tr))
+   -- The transition relations ensuring each variable is updated
+   -- or keeps its value:
+   makeUpdateTransRels v = [ makeHasUpdatedTR v
+                           , makeHasNotUpdatedTR v ]
+   makeHasUpdatedTR v =
+     TR { guard = PAnd [ P $ ILit GreaterThanEq (IEVar $ makeUpdatedByTracker v)
+                                                (IEConst 0)
+                       , P $ ILit LessThan (IEVar $ makeUpdatedByTracker v)
+                                           (IEConst $ fromIntegral $
+                                             S.size (automata synch))
+                       ]
+        , nextRelation = PTop
+        , intUpdates = []
+        , nextGuard = PTop }
+   makeHasNotUpdatedTR v =
+     TR { guard = ivIs (makeUpdatedByTracker v) (-1)
+        , nextRelation = case (v) of
+                              (BV bv) -> POr [ PAnd [ bvIs bv True
+                                                    , setTo bv True ]
+                                             , PAnd [ bvIs bv False
+                                                    , setTo bv False ]
+                                             ]
+                              _ -> PTop
+        , intUpdates = case (v) of
+                            (IV iv) -> [(iv,IEVar iv)]
+                            _ -> []
+        , nextGuard = PTop }
    -- The initial state of the system
    makeInit = PAnd $ initLocs ++ 
                      initBoolVars ++
                      initIntVars
    initLocs = map (uncurry locationIs) [ (a,initialLocation a)
-                                       | a <- automata synch
+                                       | a <- S.toList $ automata synch
                                        ]
    initBoolVars = [ P $ BLit bv b
                   | (bv,b) <- M.toList $ synchInits synch ]
    initIntVars =  [ P $ ILit Equals (IEVar iv) (IEConst $ initial d)
                   | (iv,d) <- M.toList $ synchDomains synch ]
-      
 
 -- TODO: perhaps include guards enforcing the integer variable domains?
    
 
-keySet :: (Ord a) => M.Map a b -> S.Set a
-keySet = S.fromList . M.keys
 
 
 

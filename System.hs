@@ -21,6 +21,9 @@ data BoolVariable = BoolVar VariableName
 instance Show BoolVariable where
  show (BoolVar bv) = show bv
 
+isNext :: BoolVariable -> Bool
+isNext (BoolVar (Next _)) = True
+isNext _ = False
 
 data IntVariable = IntVar VariableName
  deriving (Eq, Ord)
@@ -32,6 +35,14 @@ data Variable = BV BoolVariable | IV IntVariable
 instance Show Variable where
  show (BV bv) = show bv
  show (IV iv) = show iv
+
+varName :: Variable -> String
+varName (BV (BoolVar v)) = varName' v
+varName (IV (IntVar v)) = varName' v
+
+varName' :: VariableName -> String
+varName' (Var s) = s
+varName' (Next v) = varName' v
 
 isBV, isIV :: Variable -> Bool
 isBV (BV _) = True
@@ -76,9 +87,9 @@ instance Show Predicate where
  show (P l) = show l
  show (PNot p) = "~("++show p++")"
  show (POr []) = "[~T]"
- show (POr ps) = intercalate " v " (map show ps)
+ show (POr ps) = "("++(intercalate " v " (map show ps))++")"
  show (PAnd []) = "[T]"
- show (PAnd ps) = intercalate " ^ " (map show ps)
+ show (PAnd ps) = "("++(intercalate " ^ " (map show ps))++")"
  show (PTop) = "T"
 
 instance Temporal Predicate where
@@ -160,11 +171,14 @@ setTo bv b = next $ bvIs bv b
 bvIs :: BoolVariable -> Bool -> Predicate
 bvIs bv b = P $ BLit bv b
 
+ivIs :: IntVariable -> Integer -> Predicate
+ivIs iv i = P $ ILit Equals (IEVar iv) (IEConst i)
 
 
 data System
   = S { boolVars :: Set.Set BoolVariable
       , intVars :: Set.Set IntVariable
+      , auxVars :: Set.Set Variable
       , trans :: [[TransitionRelation]]
       -- one transition relation out of each set must be true
       -- i.e. this list of lists represents a conjunction of disjunctions
@@ -183,9 +197,11 @@ getAllVars s = ( Set.toList (boolVars s)
 data TransitionRelation
   = TR { guard :: Predicate
        , nextRelation :: Predicate
+       -- nextRelation is for predicate with mixed current and next variables
        , intUpdates :: [(IntVariable, IntExpr)]
        -- intUpdates should have the current variable, not next
        , nextGuard :: Predicate
+       -- nextGuard should have next variable, not current
        }
  deriving ( Eq, Ord )
  

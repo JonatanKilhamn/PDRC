@@ -2,6 +2,7 @@ module Helpers where
 
 import Data.Maybe
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 indent :: [String] -> [String]
 indent = concat . map (map ("  "++)) . map lines
@@ -17,3 +18,11 @@ list +++ elem = list ++ [elem]
 
 mapFst :: (a -> b) -> (a, c) -> (b, c)
 mapFst f (x,y) = (f x,y)
+
+
+keySet :: (Ord a) => M.Map a b -> S.Set a
+keySet = S.fromList . M.keys
+
+
+setIndex :: (Num c, Ord a) => a -> S.Set a -> c
+setIndex x = fromIntegral . (S.findIndex x)

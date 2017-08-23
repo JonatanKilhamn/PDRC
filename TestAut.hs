@@ -17,7 +17,7 @@ import PDR
 testSynch :: Synchronisation
 --autSynch = let s = (foldr synchronise emptySynch [testAutB, testAutA]) in
 testSynch = let s = (foldr synchronise emptySynch [testAutA]) in
-  s { synchSafety = P $ ILit NEquals (IEVar $ acounter) (IEConst 30) }
+  s { synchSafety = P $ ILit NEquals (IEVar $ acounter) (IEConst 3) }
 
 testAutA :: Automaton
 testAutA = Aut { autName = "Aut1"
@@ -38,7 +38,9 @@ testAutA = Aut { autName = "Aut1"
    AT { start = locA
       , event = "a"
       , formula =
-        TR { System.guard = P $ ILit LessThan (IEVar $ acounter) (IEConst 2)
+        TR { System.guard = PAnd [ P $ ILit LessThan (IEVar $ acounter) (IEConst 2)
+                                 , P $ ILit GreaterThanEq (IEVar $ acounter) (IEConst 0)
+                                 ]
            , nextRelation = PTop
            , intUpdates = [(acounter, IEPlus (IEVar acounter) (IEConst 1))]
            , nextGuard = PTop }
@@ -46,25 +48,26 @@ testAutA = Aut { autName = "Aut1"
       }
   upA = 
    AT { start = locB
-      , event = "a"
+      , event = "b"
       , formula =
-        TR { System.guard = PTop
+        TR { System.guard = P $ ILit GreaterThanEq (IEVar $ acounter) (IEConst 0)
            , nextRelation = PTop
            , intUpdates = [(acounter, IEPlus (IEVar acounter) (IEConst 1))]
            , nextGuard = PTop }
       , end = locA
       }  
-  loopA =
+{--  loopA =
    AT { start = locB
       , event = "c"
       , formula =
         TR { System.guard =
                P (ILit Equals (IEVar $ bcounter) (IEConst 1))
            , nextRelation = PTop
-           , intUpdates = [(IntVar $ Var "acounter", IEConst 1)]
+           , intUpdates = [(acounter, IEConst 1)]
            , nextGuard = PTop }
       , end = locB
       }  
+      --}
   locA = "A1"
   locB = "A2"
   doms = M.fromList [ (acounter, Domain { initial = 0, lower=0,upper=100})
