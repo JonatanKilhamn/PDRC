@@ -264,59 +264,59 @@ consecutionQuery (TC ass k) = do
 generalise1 :: Assignment -> PDRZ3 Assignment
 generalise1 a = do
   --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
+  let a' = nub a
   c <- get
   let p = prop c
   n <- getMaxFrameIndex
   f_n <- mkFrame n
-  z push
-  -- Assume the frame:
-  z $ assert f_n  
+  -- Context that this assignment makes Unsat, which the generalised
+  -- assignment should still make Unsat:
+  --context <- z $ mkAnd [f_n, p]
   -- Try the assignment once for each variable:
-  a' <- foldM (generaliseOnce p) a a
-  z $ pop 1
+  a' <- foldM (generaliseOnce f_n p) a a
   return a'
- {--where
-  generalise1once consequent ass var = do
-   redundant <- checkLiteral consequent ass var
-   lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
-   return $ if redundant then (removeVar ass var) else ass
-  --}
+
   
-generaliseOnce :: AST -> Assignment -> Literal -> PDRZ3 Assignment
-generaliseOnce consequent ass lit = do
-   redundant <- checkLiteral consequent ass lit
+generaliseOnce :: AST -> AST -> Assignment -> Literal -> PDRZ3 Assignment
+generaliseOnce context consequent ass lit = do
+   redundant <- checkLiteral context consequent  ass lit
    lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (delete lit ass) else ass
 
-
 -- Checks one literal to see if it can be removed from the assignment
-checkLiteral :: AST -> Cube -> Literal -> PDRZ3 Bool
-checkLiteral consequent cube lit = do
+checkLiteral :: AST -> AST -> Cube -> Literal -> PDRZ3 Bool
+checkLiteral context consequent cube lit = do
   -- Assume the modified assignment
   let modCube = [ (if (lit==l) then (pnot l) else l)
                 | l <- cube ]
+  lg $ show modCube
   ast <- mkCube modCube
-  -- Assert the modified assignment and the unwanted consequent:
+  -- Assert the modified assignment:
   res <- zlocal $ do
-   assert consequent
    assert ast
    check
-  if (res==Sat)
-  -- Changing this lit allowed us to reach the unwanted consequent
-  --  => this lit is not redundant
+  if (res==Unsat)
+  -- The modified assignment is not even internally consistent
+  then return True
+  else do
+  -- Assert the context in which the original cube led to a bad outcome:
+  res <- zlocal $ do
+   assert context
+   assert ast
+   check
+  if (res==Unsat)
+  -- This literal is necessary for the assignment to function in the context
   then return False
   else do
-  -- Changing this lit did not allow us to reach the consequent
-  -- But the lit might still not be redundant
-  -- Assert the negation of the consequent:
+  -- Assert the context and the good outcome, which is unreachable under the
+  -- original cube:
   res <- zlocal $ do
-   assert =<< mkNot consequent
+   assert context
+   assert consequent
    assert ast
-   check
-  -- If Sat, even with this lit changed we can fulfil the original
-  -- purpose of the cube (reaching the negation of the consequent)
-  -- and so it is redundant
-  return (res==Sat)
+   check  
+  -- If it's still unreachable, then this literal is unecessary
+  return (res==Unsat)
 
 
 -- Generalising an assignment which breaks consecution of another property !s
@@ -327,30 +327,23 @@ generalise2 a (TC ass k) = do
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
-  not_s' <- z $ mkNot s'
   -- TODO: change the mkTransRelation to use the substitution technique for
   --  integer variables.
   trans_kminus1 <- mkTransRelation
-  z push
   -- Assume !s, frame, transition and !s'
   -- if satisfiable with one literal changed, that literal is necessary
   -- if unsatisfiable       -  |  |  -        that literal can be removed
-  z $ do
-    assert f_kminus1
-    assert =<< mkNot s
-    --assert =<< mkNot s'
-    assert trans_kminus1
+  (context, consequent) <- z $ do
+    not_s <- mkNot s
+    c1 <- mkAnd [ not_s
+                , f_kminus1
+                , trans_kminus1 ]
+                -- , not_s' ]
+    c2 <- mkNot s'
+    return (c1, c2)
   -- Try the assignment once for each variable:
-  a' <- foldM (generaliseOnce not_s') a a
-  z $ pop 1
+  a' <- foldM (generaliseOnce context consequent) a a
   return a'
- {--where
-  generalise2once consequent ass var = do
-   redundant <- checkLiteral consequent ass var
-   lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
-   return $ if redundant then (removeVar ass var) else ass
---}
-
 
 
 
@@ -588,14 +581,23 @@ mkLiteral' l@(ILit bp e1 e2) = do
 isInteresting :: Literal -> System -> Bool
 isInteresting (BLit _ _) _ = False
 isInteresting (ILit bp e1 e2) s = inequality && current && relevant
- where inequality = (not $ elem bp [Equals, NEquals, GreaterThan, GreaterThanEq])
+ where inequality = (not $ elem bp [Equals, NEquals, GreaterThan, LessThanEq])
        current = (isCurrent $ P $ ILit bp e1 e2)
        relevant = let vs = S.union (allVarsInExpr e1) (allVarsInExpr e2) in
                   let (_,ivs) = getAllVars s in
                   vs `S.isSubsetOf` S.fromList (map IV ivs)
        
 
-
+{--
+addBreakPoint :: Literal -> PDRZ3 ()
+addBreakPoint (BLit _ _) _ = return ()
+addBreakPoint (ILit bp e1 e2) s = inequality && current && relevant
+ where inequality = (not $ elem bp [Equals, NEquals, GreaterThan, GreaterThanEq])
+       current = (isCurrent $ P $ ILit bp e1 e2)
+       relevant = let vs = S.union (allVarsInExpr e1) (allVarsInExpr e2) in
+                  let (_,ivs) = getAllVars s in
+                  vs `S.isSubsetOf` S.fromList (map IV ivs)
+--}
 
 mkIntExpr :: IntExpr -> PDRZ3 AST
 mkIntExpr ie = do
