@@ -159,7 +159,7 @@ instance Negatable BinaryPred where
  pnot GreaterThanEq = LessThan
 
 
-data Assignment = A { bvs :: M.Map BoolVariable Bool
+{--data Assignment = A { bvs :: M.Map BoolVariable Bool
                     , ivs :: M.Map IntVariable Integer
                     , lits :: M.Map Literal Bool
                     }
@@ -180,10 +180,12 @@ removeVar a (IV iv) = a { ivs = M.delete iv $ ivs a }
 
 removeLit :: Assignment -> Literal -> Assignment
 removeLit a l = a { lits = M.delete l $ lits a }
+--}
 
-instance Temporal Assignment where
+{--instance Temporal Assignment where
   next a = a { bvs = updateKeys (bvs a) next
              , ivs = updateKeys (ivs a) next }
+--}
 
 updateKeys :: (Ord k, Ord k2) => M.Map k v -> (k -> k2) -> M.Map k2 v
 updateKeys m fun = M.fromList $ map (mapFst fun) $ M.toList m

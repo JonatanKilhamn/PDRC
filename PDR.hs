@@ -201,9 +201,12 @@ unsafeStateQuery = do
                          (Just (maybeBools, maybeInts)) ->
                            let (maybeBoolVars, maybeLits) =
                                 splitAt (length bv_asts) maybeBools in
-                           Just $ A { bvs = maybeMap bvs maybeBoolVars
-                                    , ivs = maybeMap ivs maybeInts
-                                    , lits = maybeMap ils maybeLits }
+                           Just $ [ BLit bv b
+                                  | (bv, Just b) <- zip bvs maybeBoolVars ] ++
+                                  [ ILit Equals (IEVar iv) (IEConst i)
+                                  | (iv, Just i) <- zip ivs maybeInts ] ++
+                                  [ (if b then id else pnot) lit
+                                  | (lit, Just b) <- zip ils maybeLits ]
   --lg $ show maybeAss
   return (res, maybeAss)
 
@@ -221,7 +224,7 @@ consecutionQuery (TC ass k) = do
   c <- get
   let p = prop c
   s <- mkAssignment ass
-  s' <- mkAssignment $ next ass
+  s' <- mkAssignment $ map next ass
   -- TODO: use the substitution part of the trans relation
   -- Commented-out: bad cube (assignment) includes next-state variables as well
   t <- mkTransRelation
@@ -246,18 +249,21 @@ consecutionQuery (TC ass k) = do
                          (Just (maybeBools, maybeInts)) ->
                            let (maybeBoolVars, maybeLits) =
                                 splitAt (length bv_asts) maybeBools in
-                           Just $ A { bvs = maybeMap bvs maybeBoolVars
-                                    -- { bvs = maybeMap bvs'' maybeBools
-                                    -- , ivs = maybeMap ivs'' maybeInts } 
-                                    , ivs = maybeMap ivs maybeInts
-                                    , lits = maybeMap ils maybeLits }
+                           Just $ [ BLit bv b
+                                  | (bv, Just b) <- zip bvs maybeBoolVars ] ++
+                                  [ ILit Equals (IEVar iv) (IEConst i)
+                                  | (iv, Just i) <- zip ivs maybeInts ] ++
+                                  [ (if b then id else pnot) lit
+                                  | (lit, Just b) <- zip ils maybeLits ]
   lg $ show maybeAss
   return (res, maybeAss)
+
+
 
 -- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Assignment -> PDRZ3 Assignment
 generalise1 a = do
-  let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
+  --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   c <- get
   let p = prop c
   n <- getMaxFrameIndex
@@ -266,49 +272,49 @@ generalise1 a = do
   -- Assume the frame:
   z $ assert f_n  
   -- Try the assignment once for each variable:
-  a' <- foldM (generalise1once p) a vars
+  a' <- foldM (generaliseOnce p) a a
   z $ pop 1
   return a'
- where
+ {--where
   generalise1once consequent ass var = do
    redundant <- checkLiteral consequent ass var
    lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
+  --}
+  
+generaliseOnce :: AST -> Assignment -> Literal -> PDRZ3 Assignment
+generaliseOnce consequent ass lit = do
+   redundant <- checkLiteral consequent ass lit
+   lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
+   return $ if redundant then (delete lit ass) else ass
+
 
 -- Checks one literal to see if it can be removed from the assignment
-checkLiteral :: AST -> Assignment -> Variable -> PDRZ3 Bool
-checkLiteral consequent a var = do
+checkLiteral :: AST -> Cube -> Literal -> PDRZ3 Bool
+checkLiteral consequent cube lit = do
   -- Assume the modified assignment
-  let pred =           PAnd $ [ P $ BLit v (if ((BV v)==var) then not b else b)
-                              | (v,b) <- M.toList $ bvs a
-                              ] ++
-                              [ (if ((IV v)==var) then pnot else id) $
-                                 P $ ILit Equals (IEVar v) (IEConst (n))
-                              | (v,n) <- M.toList $ ivs a
-                              ] ++
-                              [ (if b then id else pnot) $ P l
-                              | (l,b) <- M.toList $ lits a
-                              ]
-  ast <- mkPredicate pred
+  let modCube = [ (if (lit==l) then (pnot l) else l)
+                | l <- cube ]
+  ast <- mkCube modCube
   -- Assert the modified assignment and the unwanted consequent:
   res <- zlocal $ do
    assert consequent
    assert ast
    check
   if (res==Sat)
-  -- Changing this variable allowed us to reach the unwanted consequent
-  --  => this var is not redundant
+  -- Changing this lit allowed us to reach the unwanted consequent
+  --  => this lit is not redundant
   then return False
   else do
-  -- Changing this var did not allow us to reach the consequent
-  -- But the variable might still not be redundant
+  -- Changing this lit did not allow us to reach the consequent
+  -- But the lit might still not be redundant
   -- Assert the negation of the consequent:
   res <- zlocal $ do
    assert =<< mkNot consequent
    assert ast
    check
-  -- If Sat, even with this variable changed we can fulfil the original
-  -- purpose of the assignment (reaching the negation of the consequent)
+  -- If Sat, even with this lit changed we can fulfil the original
+  -- purpose of the cube (reaching the negation of the consequent)
   -- and so it is redundant
   return (res==Sat)
 
@@ -317,7 +323,7 @@ checkLiteral consequent a var = do
 -- (!s a clause based on the previously found bad cube s)
 generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
 generalise2 a (TC ass k) = do
-  let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
+  --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   f_kminus1 <- mkFrame (k-1)
   s <- mkAssignment ass
   s' <- mkAssignment $ next ass
@@ -335,14 +341,18 @@ generalise2 a (TC ass k) = do
     --assert =<< mkNot s'
     assert trans_kminus1
   -- Try the assignment once for each variable:
-  a' <- foldM (generalise2once not_s') a vars
+  a' <- foldM (generaliseOnce not_s') a a
   z $ pop 1
   return a'
- where
+ {--where
   generalise2once consequent ass var = do
    redundant <- checkLiteral consequent ass var
    lg $ (show var) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (removeVar ass var) else ass
+--}
+
+
+
 
 addNewFrame :: PDRZ3 ()
 addNewFrame = do
@@ -412,6 +422,8 @@ data Frame = Init Predicate | Frame (S.Set Clause)
 
 type Clause = [Literal]
 type Cube = [Literal]
+
+type Assignment = Cube
 
 
 ----
@@ -576,7 +588,7 @@ mkLiteral' l@(ILit bp e1 e2) = do
 isInteresting :: Literal -> System -> Bool
 isInteresting (BLit _ _) _ = False
 isInteresting (ILit bp e1 e2) s = inequality && current && relevant
- where inequality = (not $ elem bp [Equals, NEquals])
+ where inequality = (not $ elem bp [Equals, NEquals, GreaterThan, GreaterThanEq])
        current = (isCurrent $ P $ ILit bp e1 e2)
        relevant = let vs = S.union (allVarsInExpr e1) (allVarsInExpr e2) in
                   let (_,ivs) = getAllVars s in
@@ -653,7 +665,7 @@ mkAssignment = mkCube . assignmentToCube
 
 -- TODO: change Cube and Clause to Sets instead of lists?
 assignmentToCube :: Assignment -> Cube
-assignmentToCube a =
+assignmentToCube = id {--a =
   [ BLit v b
   | (v,b) <- M.toList $ bvs a
   ] ++
@@ -663,6 +675,7 @@ assignmentToCube a =
   [ (if b then id else pnot) l
   | (l,b) <- M.toList $ lits a
   ]
+--}
 
 invertAssignment :: Assignment -> Clause
 invertAssignment = (map pnot) . assignmentToCube
