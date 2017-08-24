@@ -9,6 +9,9 @@ import Helpers
 class Temporal a where
     next :: a -> a
 
+class Negatable a where
+    pnot :: a -> a
+
 data VariableName = Var String | Next VariableName
  deriving (Eq, Ord)
 
@@ -67,6 +70,10 @@ instance Show Literal where
  show (BLit bv b) = if b then (show bv) else "~"++show bv
  show (ILit bp ie1 ie2) = show ie1 ++ show bp ++ show ie2
 
+instance Negatable Literal where
+ pnot (BLit bv b) = (BLit bv (not b))
+ pnot (ILit bp e1 e2) = (ILit (pnot bp) e1 e2)
+
 instance Temporal Literal where
   next (BLit v b) = BLit (next v) b
   next (ILit bp ie1 ie2) = ILit bp (next ie1) (next ie2)
@@ -97,6 +104,14 @@ instance Temporal Predicate where
   next (PNot p) = PNot (next p)
   next (PAnd ps) = PAnd (map next ps)
   next (POr ps) = POr (map next ps)
+  
+instance Negatable Predicate where
+ pnot (PNot p) = p
+ pnot (PAnd ps) = POr (map pnot ps)
+ pnot (POr ps) = PAnd (map pnot ps)
+ pnot (P l) = P (pnot l)
+ pnot p = PNot p
+ -- Should I push negations down to literals?
   
 data IntExpr
  = IEConst Integer
@@ -135,15 +150,18 @@ instance Show BinaryPred where
  show GreaterThan = ">"
  show GreaterThanEq = ">="
 
-pnot :: Predicate -> Predicate
-pnot (PNot p) = p
-pnot (PAnd ps) = POr (map pnot ps)
-pnot (POr ps) = PAnd (map pnot ps)
-pnot p = PNot p
+instance Negatable BinaryPred where
+ pnot Equals = NEquals
+ pnot NEquals = Equals
+ pnot LessThan = GreaterThanEq
+ pnot LessThanEq = GreaterThan
+ pnot GreaterThan = LessThanEq
+ pnot GreaterThanEq = LessThan
 
 
 data Assignment = A { bvs :: M.Map BoolVariable Bool
                     , ivs :: M.Map IntVariable Integer
+                    , lits :: M.Map Literal Bool
                     }
  deriving ( Eq )
 
@@ -151,12 +169,17 @@ instance Show Assignment where
  show a = show $ PAnd
   ( [ P (BLit bv b) | (bv,b) <- M.toList (bvs a) ] ++
     [ P $ ILit Equals (IEVar iv) (IEConst i)
-    | (iv,i) <- M.toList (ivs a) ]
+    | (iv,i) <- M.toList (ivs a) ] ++
+    [ (if b then id else pnot) $ P lit
+    | (lit,b) <- M.toList (lits a) ]
   )
 
 removeVar :: Assignment -> Variable -> Assignment
 removeVar a (BV bv) = a { bvs = M.delete bv $ bvs a }
 removeVar a (IV iv) = a { ivs = M.delete iv $ ivs a }
+
+removeLit :: Assignment -> Literal -> Assignment
+removeLit a l = a { lits = M.delete l $ lits a }
 
 instance Temporal Assignment where
   next a = a { bvs = updateKeys (bvs a) next
