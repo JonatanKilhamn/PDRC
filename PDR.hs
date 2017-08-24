@@ -30,6 +30,7 @@ runPdr :: System -> IO Bool
 runPdr s = do
   (res, finalState) <- evalZ3 $ runStateT (pdr s) (emptyContext)
   putStr (pdrlog finalState)
+  --putStr $ show finalState -- use when log is too long
   return res
 
 pdr :: System -> PDRZ3 Bool
@@ -188,17 +189,23 @@ unsafeStateQuery = do
   let (bvs, ivs) = getAllVars (system c)
   bv_asts <- mapM mkBoolVariable bvs
   iv_asts <- mapM mkIntVariable ivs
+  ils <- fmap (S.toList . interestingLits) get
+  il_asts <- mapM mkLiteral ils
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot p
     assert f_n
     withModel $ \m ->
-      evalBoolsAndInts m (bv_asts, iv_asts)
-  let assignment = case maybeVals of (Nothing) -> Nothing
-                                     (Just (maybeBools, maybeInts)) -> Just $
-                                      A { bvs = maybeMap bvs maybeBools
-                                        , ivs = maybeMap ivs maybeInts }
-  --lg $ show assignment
-  return (res, assignment)
+      evalBoolsAndInts m ((bv_asts ++ il_asts), iv_asts)
+  let maybeAss =
+       case maybeVals of (Nothing) -> Nothing
+                         (Just (maybeBools, maybeInts)) ->
+                           let (maybeBoolVars, maybeLits) =
+                                splitAt (length bv_asts) maybeBools in
+                           Just $ A { bvs = maybeMap bvs maybeBoolVars
+                                    , ivs = maybeMap ivs maybeInts
+                                    , lits = maybeMap ils maybeLits }
+  --lg $ show maybeAss
+  return (res, maybeAss)
 
 
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
@@ -224,6 +231,8 @@ consecutionQuery (TC ass k) = do
       (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
   bv_asts <- mapM mkBoolVariable bvs --bvs''
   iv_asts <- mapM mkIntVariable ivs -- ivs''
+  ils <- fmap (S.toList . interestingLits) get
+  il_asts <- mapM mkLiteral ils
   -- Assertions and actual SAT check:
   (res, maybeVals) <- zlocal $ do
     assert =<< mkNot s
@@ -231,13 +240,17 @@ consecutionQuery (TC ass k) = do
     assert f_kminus1
     assert t
     withModel $ \m ->
-      (evalBoolsAndInts m) (bv_asts, iv_asts)
-  let maybeAss = case maybeVals of (Nothing) -> Nothing
-                                   (Just (maybeBools, maybeInts)) -> Just $
-                                    --A { bvs = maybeMap bvs'' maybeBools
-                                    --  , ivs = maybeMap ivs'' maybeInts } 
-                                    A { bvs = maybeMap bvs maybeBools
-                                      , ivs = maybeMap ivs maybeInts } 
+      (evalBoolsAndInts m) (bv_asts++il_asts, iv_asts)
+  let maybeAss =
+       case maybeVals of (Nothing) -> Nothing
+                         (Just (maybeBools, maybeInts)) ->
+                           let (maybeBoolVars, maybeLits) =
+                                splitAt (length bv_asts) maybeBools in
+                           Just $ A { bvs = maybeMap bvs maybeBoolVars
+                                    -- { bvs = maybeMap bvs'' maybeBools
+                                    -- , ivs = maybeMap ivs'' maybeInts } 
+                                    , ivs = maybeMap ivs maybeInts
+                                    , lits = maybeMap ils maybeLits }
   lg $ show maybeAss
   return (res, maybeAss)
 
@@ -272,6 +285,9 @@ checkLiteral consequent a var = do
                               [ (if ((IV v)==var) then pnot else id) $
                                  P $ ILit Equals (IEVar v) (IEConst (n))
                               | (v,n) <- M.toList $ ivs a
+                              ] ++
+                              [ (if b then id else pnot) $ P l
+                              | (l,b) <- M.toList $ lits a
                               ]
   ast <- mkPredicate pred
   -- Assert the modified assignment and the unwanted consequent:
@@ -395,6 +411,7 @@ data Frame = Init Predicate | Frame (S.Set Clause)
  deriving ( Eq, Ord, Show )
 
 type Clause = [Literal]
+type Cube = [Literal]
 
 
 ----
@@ -406,6 +423,7 @@ data SMTContext
   , predMap :: M.Map (Predicate) AST
   , intExprMap :: M.Map (IntExpr) AST
   , litMap :: M.Map (Literal) AST
+  , interestingLits :: S.Set Literal
   , varMap :: M.Map (Variable) AST
   , frames :: [Frame] -- replace with M.Map Int Frame?
   , prioQueue :: PriorityQueue
@@ -431,6 +449,10 @@ instance Show SMTContext where
     [ show l
     | (l,_) <- M.toList $ litMap c
     ] ++
+    [ "INTERESTING LITERALS:"] ++ indent
+    [ show l
+    | l <- S.toList $ interestingLits c
+    ] ++    
     [ "VARIABLES:"] ++ indent
     [ show v
     | (v,_) <- M.toList $ varMap c
@@ -449,6 +471,7 @@ emptyContext = C { system = undefined
                  , intExprMap = M.empty
                  , litMap = M.empty
                  , varMap = M.empty
+                 , interestingLits = S.empty
                  , frames = []
                  , prioQueue = Q.empty
                  , prop = undefined
@@ -457,7 +480,9 @@ emptyContext = C { system = undefined
 
 putInitialSmtContext :: System -> PDRZ3 ()
 putInitialSmtContext s = do
-  p <- getProp s
+  c <- get
+  put $ c {system = s}
+  p <- mkPredicate (safetyProp s)
   c <- get
   put $ c {system = s, prop = p, frames = [Init (System.init s), emptyFrame]} 
   return ()
@@ -467,9 +492,7 @@ putQueue :: PriorityQueue -> PDRZ3 ()
 putQueue q = do
   c <- get
   put c {prioQueue = q}
-
-getProp :: System -> PDRZ3 AST
-getProp s = mkPredicate (safetyProp s)
+ 
 
 lg :: String -> PDRZ3 ()
 lg s = do
@@ -532,16 +555,35 @@ mkLiteral' :: Literal -> PDRZ3 AST
 mkLiteral' (BLit v b) = do
    v_ast <- mkBoolVariable v
    z $ if b then return v_ast else mkNot v_ast
-mkLiteral' (ILit bp e1 e2) = do
+mkLiteral' l@(ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
- z $ (zfunction bp) ast1 ast2
+ final_ast <- z $ (zfunction bp) ast1 ast2
+ c <- get
+ if (not $ isInteresting l (system c))
+ then return ()
+ else do
+  put $ c { interestingLits = S.insert l (interestingLits c) }
+ return final_ast 
   where zfunction Equals = mkEq
         zfunction NEquals = curry ((mkNot =<<) . (uncurry mkEq))
         zfunction LessThan = mkLt
         zfunction LessThanEq = mkLe
         zfunction GreaterThan = mkGt
         zfunction GreaterThanEq = mkGe
+
+
+isInteresting :: Literal -> System -> Bool
+isInteresting (BLit _ _) _ = False
+isInteresting (ILit bp e1 e2) s = inequality && current && relevant
+ where inequality = (not $ elem bp [Equals, NEquals])
+       current = (isCurrent $ P $ ILit bp e1 e2)
+       relevant = let vs = S.union (allVarsInExpr e1) (allVarsInExpr e2) in
+                  let (_,ivs) = getAllVars s in
+                  vs `S.isSubsetOf` S.fromList (map IV ivs)
+       
+
+
 
 mkIntExpr :: IntExpr -> PDRZ3 AST
 mkIntExpr ie = do
@@ -607,30 +649,34 @@ mkVariable v = do
 
 
 mkAssignment :: Assignment -> PDRZ3 AST
-mkAssignment a =
-  mkPredicate $ assignmentToPred a
+mkAssignment = mkCube . assignmentToCube
 
-assignmentToPred :: Assignment -> Predicate
-assignmentToPred a = PAnd $
-  [ P $ BLit v b
+-- TODO: change Cube and Clause to Sets instead of lists?
+assignmentToCube :: Assignment -> Cube
+assignmentToCube a =
+  [ BLit v b
   | (v,b) <- M.toList $ bvs a
   ] ++
-  [ P $ ILit Equals (IEVar v) (IEConst (n))
+  [ ILit Equals (IEVar v) (IEConst (n))
   | (v,n) <- M.toList $ ivs a
+  ] ++
+  [ (if b then id else pnot) l
+  | (l,b) <- M.toList $ lits a
   ]
 
 invertAssignment :: Assignment -> Clause
-invertAssignment a =
-  [ BLit v (not b)
-  | (v,b) <- M.toList $ bvs a
-  ] ++
-  [ ILit NEquals (IEVar v) (IEConst (n))
-  | (v,n) <- M.toList $ ivs a
-  ]
+invertAssignment = (map pnot) . assignmentToCube
 
 
 mkClause :: Clause -> PDRZ3 AST
-mkClause = mkPredicate . PAnd . (map P)
+mkClause = mkPredicate . POr . (map P)
+
+mkCube :: Cube -> PDRZ3 AST
+mkCube = mkPredicate . PAnd . (map P)
+
+
+
+
 
 
 mkTransRelation :: PDRZ3 AST
