@@ -111,7 +111,7 @@ instance Negatable Predicate where
  pnot (POr ps) = PAnd (map pnot ps)
  pnot (P l) = P (pnot l)
  pnot p = PNot p
- -- Should I push negations down to literals?
+
   
 data IntExpr
  = IEConst Integer
@@ -158,34 +158,6 @@ instance Negatable BinaryPred where
  pnot GreaterThan = LessThanEq
  pnot GreaterThanEq = LessThan
 
-
-{--data Assignment = A { bvs :: M.Map BoolVariable Bool
-                    , ivs :: M.Map IntVariable Integer
-                    , lits :: M.Map Literal Bool
-                    }
- deriving ( Eq )
-
-instance Show Assignment where
- show a = show $ PAnd
-  ( [ P (BLit bv b) | (bv,b) <- M.toList (bvs a) ] ++
-    [ P $ ILit Equals (IEVar iv) (IEConst i)
-    | (iv,i) <- M.toList (ivs a) ] ++
-    [ (if b then id else pnot) $ P lit
-    | (lit,b) <- M.toList (lits a) ]
-  )
-
-removeVar :: Assignment -> Variable -> Assignment
-removeVar a (BV bv) = a { bvs = M.delete bv $ bvs a }
-removeVar a (IV iv) = a { ivs = M.delete iv $ ivs a }
-
-removeLit :: Assignment -> Literal -> Assignment
-removeLit a l = a { lits = M.delete l $ lits a }
---}
-
-{--instance Temporal Assignment where
-  next a = a { bvs = updateKeys (bvs a) next
-             , ivs = updateKeys (ivs a) next }
---}
 
 updateKeys :: (Ord k, Ord k2) => M.Map k v -> (k -> k2) -> M.Map k2 v
 updateKeys m fun = M.fromList $ map (mapFst fun) $ M.toList m

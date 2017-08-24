@@ -20,6 +20,11 @@ import System
 debug :: Bool
 debug = False
 
+debug_iter_bABSILF, debug_iter_oPL, debug_iter_bEQ :: Int
+debug_iter_bABSILF = 5
+debug_iter_oPL = 5
+debug_iter_bEQ = 10
+
 
 type PDRZ3 = StateT SMTContext Z3
 
@@ -55,9 +60,10 @@ outerPdrLoop i s = do
   if success
   then return True
   else do
-  if (debug && i>=5)
+  if (debug && i>=debug_iter_oPL)
   then do
-  lg "DEBUG: breaking after 5 iteration of outerPdrLoop"
+  lg $ "DEBUG: breaking after " ++ show debug_iter_oPL ++ 
+       " iteration of outerPdrLoop"
   return True
   else do
   outerPdrLoop (i+1) s
@@ -86,9 +92,10 @@ blockAllBadStatesInLastFrame i = do
     lg $ "Failed to block; original bad state was " ++ (show assignment)
     return False
   else do
-  if (debug && i>=5)
+  if (debug && i>= debug_iter_bABSILF)
   then do
-  lg "DEBUG: breaking after 5 iteration of bABSILF"
+  lg $ "DEBUG: breaking after " ++ show debug_iter_bABSILF ++
+       " iteration of bABSILF"
   return True
   else do
   blockAllBadStatesInLastFrame (i+1)
@@ -111,9 +118,10 @@ blockEntireQueue i = do
   if (not success)
   then return False
   else do
-  if (debug && i>=10)
+  if (debug && i>=debug_iter_bEQ)
   then do
-  lg "DEBUG: breaking after 10 iteration of bEQ"
+  lg $ "DEBUG: breaking after " ++ show debug_iter_bEQ ++
+       " iteration of bEQ"
   return True
   else do
   blockEntireQueue (i+1)
@@ -149,7 +157,7 @@ forwardPropagation = do
   isFixedPoints <- mapM forwardPropOneFrame [1..(n-1)]
   return $ or isFixedPoints
 
--- Precondition: k>1
+-- Precondition: k>0
 -- Returns: true if the next frame is syntactically equal to the current one
 --   after propagation
 forwardPropOneFrame :: Int -> PDRZ3 Bool
@@ -177,7 +185,7 @@ tryForwardProp k clause = do
    assert fr_k
    assert =<< mkNot cl'
    check
-  return (res == Unsat) -- TODO: what about Undef?
+  return (res == Unsat)
 
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
@@ -226,14 +234,13 @@ consecutionQuery (TC ass k) = do
   s <- mkAssignment ass
   s' <- mkAssignment $ map next ass
   -- TODO: use the substitution part of the trans relation
-  -- Commented-out: bad cube (assignment) includes next-state variables as well
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   let (bvs, ivs) = getAllVars (system c)
       (bvs', ivs') = (map next bvs, map next ivs)
       (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
-  bv_asts <- mapM mkBoolVariable bvs --bvs''
-  iv_asts <- mapM mkIntVariable ivs -- ivs''
+  bv_asts <- mapM mkBoolVariable bvs
+  iv_asts <- mapM mkIntVariable ivs
   ils <- fmap (S.toList . interestingLits) get
   il_asts <- mapM mkLiteral ils
   -- Assertions and actual SAT check:
@@ -259,7 +266,6 @@ consecutionQuery (TC ass k) = do
   return (res, maybeAss)
 
 
-
 -- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Assignment -> PDRZ3 Assignment
 generalise1 a = do
@@ -269,27 +275,51 @@ generalise1 a = do
   let p = prop c
   n <- getMaxFrameIndex
   f_n <- mkFrame n
-  -- Context that this assignment makes Unsat, which the generalised
-  -- assignment should still make Unsat:
-  --context <- z $ mkAnd [f_n, p]
   -- Try the assignment once for each variable:
-  a' <- foldM (generaliseOnce f_n p) a a
+  --  f_n is the context (the generalised assignment must hold in f_n)
+  --  p is the consequent (the generalised assignment + context should make
+  --  p impossible)
+  a' <- foldM (tryRemoveLiteral f_n p) a a
   return a'
 
-  
-generaliseOnce :: AST -> AST -> Assignment -> Literal -> PDRZ3 Assignment
-generaliseOnce context consequent ass lit = do
-   redundant <- checkLiteral context consequent  ass lit
+-- Generalising an assignment which breaks consecution of another property !s
+-- (!s a clause based on the previously found bad cube s)
+generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
+generalise2 a (TC ass k) = do
+  --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
+  f_kminus1 <- mkFrame (k-1)
+  s <- mkAssignment ass
+  s' <- mkAssignment $ next ass
+  -- TODO: change the mkTransRelation to use the substitution technique for
+  --  integer variables.
+  trans_kminus1 <- mkTransRelation
+  -- Assume !s, frame, transition and !s'
+  -- if satisfiable with one literal changed, that literal is necessary
+  -- if unsatisfiable       -  |  |  -        that literal can be removed
+  (context, consequent) <- z $ do
+    not_s <- mkNot s
+    c1 <- mkAnd [ not_s
+                , f_kminus1
+                , trans_kminus1 ]
+                -- , not_s' ]
+    c2 <- mkNot s'
+    return (c1, c2)
+  -- Try the assignment once for each variable:
+  a' <- foldM (tryRemoveLiteral context consequent) a a
+  return a'
+
+tryRemoveLiteral :: AST -> AST -> Assignment -> Literal -> PDRZ3 Assignment
+tryRemoveLiteral context consequent ass lit = do
+   redundant <- shouldRemoveLiteral context consequent  ass lit
    lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (delete lit ass) else ass
 
 -- Checks one literal to see if it can be removed from the assignment
-checkLiteral :: AST -> AST -> Cube -> Literal -> PDRZ3 Bool
-checkLiteral context consequent cube lit = do
+shouldRemoveLiteral :: AST -> AST -> Cube -> Literal -> PDRZ3 Bool
+shouldRemoveLiteral context consequent cube lit = do
   -- Assume the modified assignment
   let modCube = [ (if (lit==l) then (pnot l) else l)
                 | l <- cube ]
-  lg $ show modCube
   ast <- mkCube modCube
   -- Assert the modified assignment:
   res <- zlocal $ do
@@ -319,31 +349,6 @@ checkLiteral context consequent cube lit = do
   return (res==Unsat)
 
 
--- Generalising an assignment which breaks consecution of another property !s
--- (!s a clause based on the previously found bad cube s)
-generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
-generalise2 a (TC ass k) = do
-  --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
-  f_kminus1 <- mkFrame (k-1)
-  s <- mkAssignment ass
-  s' <- mkAssignment $ next ass
-  -- TODO: change the mkTransRelation to use the substitution technique for
-  --  integer variables.
-  trans_kminus1 <- mkTransRelation
-  -- Assume !s, frame, transition and !s'
-  -- if satisfiable with one literal changed, that literal is necessary
-  -- if unsatisfiable       -  |  |  -        that literal can be removed
-  (context, consequent) <- z $ do
-    not_s <- mkNot s
-    c1 <- mkAnd [ not_s
-                , f_kminus1
-                , trans_kminus1 ]
-                -- , not_s' ]
-    c2 <- mkNot s'
-    return (c1, c2)
-  -- Try the assignment once for each variable:
-  a' <- foldM (generaliseOnce context consequent) a a
-  return a'
 
 
 
@@ -369,8 +374,8 @@ updateFrames (TC s k) = do
                   ]
   c <- get
   put $ c {frames = newFrames}
-  lg $ "Updated frames: "
-  lg $ show newFrames
+  lg $ "Updated frames: added "++ show clause++" to frames 1—"++show k
+  --lg $ show newFrames
  where addTo (Init p) cl = (Init p)
        addTo (Frame cls) cl =
          -- TODO: subsumption check
@@ -430,7 +435,7 @@ data SMTContext
   , litMap :: M.Map (Literal) AST
   , interestingLits :: S.Set Literal
   , varMap :: M.Map (Variable) AST
-  , frames :: [Frame] -- replace with M.Map Int Frame?
+  , frames :: [Frame] -- TODO: replace with M.Map Int Frame?
   , prioQueue :: PriorityQueue
   , prop :: AST
   , pdrlog :: String
@@ -652,32 +657,13 @@ mkVariable (BV (BoolVar v)) = z $ mkFreshBoolVar (show v)
 mkVariable (IV (IntVar v)) = z $ mkFreshIntVar (show v)
 
 
-{--
-mkVariable :: Variable -> PDRZ3 AST
-mkVariable v = do
-  vm <- fmap varMap get
-  let maybeAst = M.lookup v vm
-  case maybeAst of (Just ast) -> return ast
-                   (Nothing) -> mkVariable' v
---}
-
 
 mkAssignment :: Assignment -> PDRZ3 AST
 mkAssignment = mkCube . assignmentToCube
 
 -- TODO: change Cube and Clause to Sets instead of lists?
 assignmentToCube :: Assignment -> Cube
-assignmentToCube = id {--a =
-  [ BLit v b
-  | (v,b) <- M.toList $ bvs a
-  ] ++
-  [ ILit Equals (IEVar v) (IEConst (n))
-  | (v,n) <- M.toList $ ivs a
-  ] ++
-  [ (if b then id else pnot) l
-  | (l,b) <- M.toList $ lits a
-  ]
---}
+assignmentToCube = id
 
 invertAssignment :: Assignment -> Clause
 invertAssignment = (map pnot) . assignmentToCube
@@ -707,18 +693,6 @@ mkTransRelation = do
        intUpdateToPred (var, ie) =
          P $ ILit Equals (next $ IEVar var) ie
 
-
-
-
-
-
-
-testz = do
- v <- mkVariable (next $ BV $ BoolVar $ Var "foo")
- z $ assert v
- nv <- z $ mkNot v
- --z $ assert nv
- z check
 
 
 -- TODO: look into lenses for updating c
