@@ -122,3 +122,46 @@ main :: IO (Maybe [Bool])
 main = do
  (res, mbools) <- evalZ3 script
  return mbools
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+-- Experimentation: trying out the unsat core
+-- This was taken from generalise2, and was intended to replace the call
+-- to tryRemoveLiteral.
+
+  cube_asts <- mapM mkCubeLiteral a
+  (res, core) <- zlocal $ do
+   assert =<< mkNot s
+   assert f_kminus1
+   assert trans_kminus1
+   assert =<< mkNot s'
+   res <- solverCheckAssumptions cube_asts
+   core <- solverGetUnsatCore
+   return (res,core)
+  let core_lits = (map ((M.!) (M.fromList (zip cube_asts a))) core)
+  lg $ "EXPERIMENT: " ++ show res
+  lg $ "Unsat_core is " ++ show core_lits
+  return core_lits
+ where mkCubeLiteral lit = do
+        l <- mkLiteral lit
+        x <- z $ do
+         x <- mkFreshBoolVar (show lit)
+         x' <- mkNot x
+         l' <- mkNot l
+         d_1 <- mkOr [x, l']
+         d_2 <- mkOr [x', l]
+         c_1 <- mkAnd [d_1, d_2]
+         assert c_1
+         return x
+        return x
+ 
+ 
