@@ -139,7 +139,7 @@ blockBadState (TC s k) = do
     lg $ "Found bad predecessor cube: " ++ show m ++ " at frame " ++ show (k-1)
     mapM_ queueInsert [TC m (k-1), TC s k]
   else do
-    lg "Bad cubed blocked."
+    lg $ "Bad cubed blocked: "++ show s
     updateFrames (TC s k)
     n <- getMaxFrameIndex
     when (k < n) (queueInsert (TC s (k+1)))
@@ -171,6 +171,7 @@ forwardPropOneFrame k = do
       newFrames = (take (k+1) frs) ++ [Frame nextClauses'] ++ (drop (k+2) frs)
   c <- get
   put c { frames = newFrames }
+  lg $ "Forward prop.: " ++ show newFrames
   return (newFrames!!k == newFrames!!(k+1))
  where try acc clause = do
         res <- tryForwardProp k clause
@@ -211,7 +212,7 @@ unsafeStateQuery = do
 
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
 consecutionQuery (TC ass k) = do
-  lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
+  --lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
   c <- get
   -- Context:
   s <- mkAssignment ass
@@ -233,7 +234,7 @@ consecutionQuery (TC ass k) = do
       , queryIntVars = ivs
       , queryLits = lits
       , queryContext = context }
-  lg $ show maybeAss
+  --lg $ show maybeAss
   return (res, maybeAss)
 
 data Query = Q { queryContext :: AST
@@ -322,7 +323,7 @@ generalise2 a (TC ass k) = do
 tryRemoveLiteral :: AST -> AST -> Assignment -> Literal -> PDRZ3 Assignment
 tryRemoveLiteral context consequent ass lit = do
    redundant <- shouldRemoveLiteral context consequent  ass lit
-   lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
+   --lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
    return $ if redundant then (delete lit ass) else ass
 
 -- Checks one literal to see if it can be removed from the assignment
@@ -380,17 +381,35 @@ updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (TC s k) = do
   let clause = invertAssignment s
   c <- get
-  let newFrames = [ if (i > 0 && i <= k) then (addTo fr clause) else fr
-                  | (fr,i) <- zip (frames c) [0..]
-                  ]
+  newFrames <- sequence $
+   [ if (i > 0 && i <= k) then (addTo fr clause) else return fr
+   | (fr,i) <- zip (frames c) [0..]
+   ]
   c <- get
   put $ c {frames = newFrames}
   lg $ "Updated frames: added "++ show clause++" to frames 1—"++show k
   --lg $ show newFrames
- where addTo (Init p) cl = (Init p)
-       addTo (Frame cls) cl =
-         -- TODO: subsumption check
-         Frame (S.union (S.singleton cl) cls)
+ where addTo (Init p) cl = return (Init p)
+       addTo (Frame cls) cl = do
+        lg $ "Checking subsumption when adding "++(show cl)++" to "++(show cls)
+        cl_ast <- mkClause cl
+        z push
+        z $ assert cl_ast
+        new_cls <- foldM trySubsume [] (S.toList cls)
+        z $ pop 1
+        return $ Frame (S.fromList $ cl : new_cls)
+       trySubsume acc cand = do
+        z push
+        cand_ast <- mkClause cand
+        z $ assert =<< mkNot cand_ast
+        res <- z check
+        z $ pop 1
+        if (res==Sat)
+        -- This clause should not be removed by subsumption
+        then return $ cand : acc
+        else do
+        lg $ "Clause "++(show cand)++"removed by subsumption"
+        return acc
 
 
 
