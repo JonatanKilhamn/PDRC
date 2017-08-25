@@ -192,12 +192,10 @@ unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
 unsafeStateQuery = do
   c <- get
   -- Context:
-  let p = prop c
+  not_p <- mkPredicate $ pnot $ prop c
   f_n <- mkFrame =<< getMaxFrameIndex
-  context <- z $ do
-    not_p <- mkNot p
-    mkAnd [ not_p
-          , f_n ]
+  context <- z $ mkAnd [ not_p
+                       , f_n ]
   -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
   lits <- fmap (S.toList . interestingLits) get
@@ -216,18 +214,16 @@ consecutionQuery (TC ass k) = do
   lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
   c <- get
   -- Context:
-  let p = prop c
   s <- mkAssignment ass
+  not_s <- z $ mkNot s
   s' <- mkAssignment $ map next ass
   -- TODO: use the substitution part of the trans relation
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
-  context <- z $ do
-    not_s <- mkNot s
-    mkAnd [ not_s
-          , s'
-          , f_kminus1
-          , t ]
+  context <- z $ mkAnd [ not_s
+                       , s'
+                       , f_kminus1
+                       , t ]
   -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
   lits <- fmap (S.toList . interestingLits) get
@@ -245,7 +241,6 @@ data Query = Q { queryContext :: AST
                , queryIntVars :: [IntVariable]
                , queryLits :: [Literal] }
  deriving ( Eq, Show, Ord )
-
 
 doQuery :: Query -> PDRZ3 (Result, Maybe Assignment)
 doQuery q = do
@@ -288,7 +283,7 @@ generalise1 a = do
   --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   let a' = nub a
   c <- get
-  let p = prop c
+  p <- mkPredicate $ prop c
   n <- getMaxFrameIndex
   f_n <- mkFrame n
   -- Try the assignment once for each variable:
@@ -453,7 +448,7 @@ data SMTContext
   , varMap :: M.Map (Variable) AST
   , frames :: [Frame] -- TODO: replace with M.Map Int Frame?
   , prioQueue :: PriorityQueue
-  , prop :: AST
+  , prop :: Predicate
   , pdrlog :: String
   }
  deriving ( Eq, Ord )
@@ -507,10 +502,7 @@ emptyContext = C { system = undefined
 putInitialSmtContext :: System -> PDRZ3 ()
 putInitialSmtContext s = do
   c <- get
-  put $ c {system = s}
-  p <- mkPredicate (safetyProp s)
-  c <- get
-  put $ c {system = s, prop = p, frames = [Init (System.init s), emptyFrame]} 
+  put $ c {system = s, prop = safetyProp s, frames = [Init (System.init s), emptyFrame]} 
   return ()
 
 
