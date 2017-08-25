@@ -191,33 +191,88 @@ tryForwardProp k clause = do
 unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
 unsafeStateQuery = do
   c <- get
+  -- Context:
   let p = prop c
-  n <- getMaxFrameIndex
-  f_n <- mkFrame n
+  f_n <- mkFrame =<< getMaxFrameIndex
+  context <- z $ do
+    not_p <- mkNot p
+    mkAnd [ not_p
+          , f_n ]
+  -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
-  bv_asts <- mapM mkBoolVariable bvs
-  iv_asts <- mapM mkIntVariable ivs
-  ils <- fmap (S.toList . interestingLits) get
-  il_asts <- mapM mkLiteral ils
-  (res, maybeVals) <- zlocal $ do
-    assert =<< mkNot p
-    assert f_n
-    withModel $ \m ->
-      evalBoolsAndInts m ((bv_asts ++ il_asts), iv_asts)
-  let maybeAss =
-       case maybeVals of (Nothing) -> Nothing
-                         (Just (maybeBools, maybeInts)) ->
-                           let (maybeBoolVars, maybeLits) =
-                                splitAt (length bv_asts) maybeBools in
-                           Just $ [ BLit bv b
-                                  | (bv, Just b) <- zip bvs maybeBoolVars ] ++
-                                  [ ILit Equals (IEVar iv) (IEConst i)
-                                  | (iv, Just i) <- zip ivs maybeInts ] ++
-                                  [ (if b then id else pnot) lit
-                                  | (lit, Just b) <- zip ils maybeLits ]
+  lits <- fmap (S.toList . interestingLits) get
+  -- Query:
+  (res, maybeAss) <- doQuery $
+    Q { queryBoolVars = bvs
+      , queryIntVars = ivs
+      , queryLits = lits
+      , queryContext = context }
   --lg $ show maybeAss
   return (res, maybeAss)
 
+
+consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
+consecutionQuery (TC ass k) = do
+  lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
+  c <- get
+  -- Context:
+  let p = prop c
+  s <- mkAssignment ass
+  s' <- mkAssignment $ map next ass
+  -- TODO: use the substitution part of the trans relation
+  t <- mkTransRelation
+  f_kminus1 <- mkFrame (k-1)
+  context <- z $ do
+    not_s <- mkNot s
+    mkAnd [ not_s
+          , s'
+          , f_kminus1
+          , t ]
+  -- Variables and lits to extract from query:
+  let (bvs, ivs) = getAllVars (system c)
+  lits <- fmap (S.toList . interestingLits) get
+  -- Query:
+  (res, maybeAss) <- doQuery $
+    Q { queryBoolVars = bvs
+      , queryIntVars = ivs
+      , queryLits = lits
+      , queryContext = context }
+  lg $ show maybeAss
+  return (res, maybeAss)
+
+data Query = Q { queryContext :: AST
+               , queryBoolVars :: [BoolVariable]
+               , queryIntVars :: [IntVariable]
+               , queryLits :: [Literal] }
+ deriving ( Eq, Show, Ord )
+
+
+doQuery :: Query -> PDRZ3 (Result, Maybe Assignment)
+doQuery q = do
+  let bvs = queryBoolVars q
+      ivs = queryIntVars q
+      lits = queryLits q
+  bv_asts <- mapM mkBoolVariable $ bvs
+  iv_asts <- mapM mkIntVariable $ ivs
+  lit_asts <- mapM mkLiteral $ lits
+  -- Assertions and actual SAT check:
+  (res, maybeVals) <- zlocal $ do
+    assert $ queryContext q
+    withModel $ \m -> do
+      maybeBools <- mapM (evalBool m) bv_asts
+      maybeInts <- mapM (evalInt m) iv_asts
+      maybeLits <- mapM (evalBool m) lit_asts
+      return (maybeBools, maybeInts, maybeLits)
+  let maybeAss =
+       case maybeVals of (Nothing) -> Nothing
+                         (Just (maybeBools, maybeInts, maybeLits)) ->
+                           Just $ [ BLit bv b
+                                  | (bv, Just b) <- zip bvs maybeBools ] ++
+                                  [ ILit Equals (IEVar iv) (IEConst i)
+                                  | (iv, Just i) <- zip ivs maybeInts ] ++
+                                  [ (if b then id else pnot) lit
+                                  | (lit, Just b) <- zip lits maybeLits ]
+  return (res, maybeAss)
 
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
 evalBoolsAndInts m (as1,as2) = do
@@ -225,45 +280,6 @@ evalBoolsAndInts m (as1,as2) = do
   maybes2 <- mapM (evalInt m) as2
   return (maybes1, maybes2)
 
-
-consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
-consecutionQuery (TC ass k) = do
-  lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
-  c <- get
-  let p = prop c
-  s <- mkAssignment ass
-  s' <- mkAssignment $ map next ass
-  -- TODO: use the substitution part of the trans relation
-  t <- mkTransRelation
-  f_kminus1 <- mkFrame (k-1)
-  let (bvs, ivs) = getAllVars (system c)
-      (bvs', ivs') = (map next bvs, map next ivs)
-      (bvs'', ivs'') = (bvs++bvs', ivs++ivs')
-  bv_asts <- mapM mkBoolVariable bvs
-  iv_asts <- mapM mkIntVariable ivs
-  ils <- fmap (S.toList . interestingLits) get
-  il_asts <- mapM mkLiteral ils
-  -- Assertions and actual SAT check:
-  (res, maybeVals) <- zlocal $ do
-    assert =<< mkNot s
-    assert s'
-    assert f_kminus1
-    assert t
-    withModel $ \m ->
-      (evalBoolsAndInts m) (bv_asts++il_asts, iv_asts)
-  let maybeAss =
-       case maybeVals of (Nothing) -> Nothing
-                         (Just (maybeBools, maybeInts)) ->
-                           let (maybeBoolVars, maybeLits) =
-                                splitAt (length bv_asts) maybeBools in
-                           Just $ [ BLit bv b
-                                  | (bv, Just b) <- zip bvs maybeBoolVars ] ++
-                                  [ ILit Equals (IEVar iv) (IEConst i)
-                                  | (iv, Just i) <- zip ivs maybeInts ] ++
-                                  [ (if b then id else pnot) lit
-                                  | (lit, Just b) <- zip ils maybeLits ]
-  lg $ show maybeAss
-  return (res, maybeAss)
 
 
 -- Generalising an assignment which breaks the safety property in F_N
@@ -569,11 +585,7 @@ mkLiteral' l@(ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
  final_ast <- z $ (zfunction bp) ast1 ast2
- c <- get
- if (not $ isInteresting l (system c))
- then return ()
- else do
-  put $ c { interestingLits = S.insert l (interestingLits c) }
+ addInterestingLiteral l
  return final_ast 
   where zfunction Equals = mkEq
         zfunction NEquals = curry ((mkNot =<<) . (uncurry mkEq))
@@ -583,10 +595,21 @@ mkLiteral' l@(ILit bp e1 e2) = do
         zfunction GreaterThanEq = mkGe
 
 
+addInterestingLiteral :: Literal -> PDRZ3 ()
+addInterestingLiteral l = do
+ c <- get
+ let existing = interestingLits c
+     interesting = isInteresting l (system c)
+     new = not (S.member l existing || S.member (pnot l) existing)
+ if (new && interesting)
+ then put $ c { interestingLits = S.insert l (interestingLits c) }
+ else return ()
+
+
 isInteresting :: Literal -> System -> Bool
 isInteresting (BLit _ _) _ = False
 isInteresting (ILit bp e1 e2) s = inequality && current && relevant
- where inequality = (not $ elem bp [Equals, NEquals, GreaterThan, LessThanEq])
+ where inequality = (not $ elem bp [Equals, NEquals])
        current = (isCurrent $ P $ ILit bp e1 e2)
        relevant = let vs = S.union (allVarsInExpr e1) (allVarsInExpr e2) in
                   let (_,ivs) = getAllVars s in
