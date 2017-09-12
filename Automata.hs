@@ -240,7 +240,10 @@ synchToSystem :: Synchronisation -> System
 synchToSystem synch = 
  S { boolVars = bVars
    , intVars = S.unions [ iVars
-                        , locVars ]
+                        , locVars 
+                        --, updatedByTrackers
+                        --, S.singleton eventVar
+                        ]
    , auxVars = S.unions [ S.map IV updatedByTrackers
                         , S.singleton (IV eventVar) ]
    , trans = S.toList $

@@ -77,13 +77,13 @@ blockAllBadStatesInLastFrame :: Int -> PDRZ3 Bool
 blockAllBadStatesInLastFrame i = do
   let setup = undefined -- some setup surely needed
   n <- getMaxFrameIndex
-  (res, maybeAssignment) <- unsafeStateQuery
+  (res, maybeCube) <- unsafeStateQuery
   if (res == Unsat) -- There is no unsafe state in F_n
   then do
     lg "All bad states blocked – no more unsafe states found at this depth"
     return True
   else do
-  assignment <- generalise1 (fromJust maybeAssignment)
+  assignment <- generalise1 (fromJust maybeCube)
   lg $ "Generalised assignment: " ++ show assignment
   putQueue $ priorityQueue (TC assignment n)
   success <- blockEntireQueue 0
@@ -132,10 +132,10 @@ blockBadState (TC s k) = do
   if k == 0
   then return False
   else do
-  (res, maybeAssignment) <- consecutionQuery (TC s k)
+  (res, maybeCube) <- consecutionQuery (TC s k)
   if (res == Sat)
   then do
-    m <- generalise2 (fromJust maybeAssignment) (TC s k)
+    m <- generalise2 (fromJust maybeCube) (TC s k)
     lg $ "Found bad predecessor cube: " ++ show m ++ " at frame " ++ show (k-1)
     mapM_ queueInsert [TC m (k-1), TC s k]
   else do
@@ -189,7 +189,7 @@ tryForwardProp k clause = do
   return (res == Unsat)
 
 
-unsafeStateQuery :: PDRZ3 (Result, Maybe Assignment)
+unsafeStateQuery :: PDRZ3 (Result, Maybe Cube)
 unsafeStateQuery = do
   c <- get
   -- Context:
@@ -210,14 +210,14 @@ unsafeStateQuery = do
   return (res, maybeAss)
 
 
-consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Assignment)
+consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Cube)
 consecutionQuery (TC ass k) = do
   --lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
   c <- get
   -- Context:
-  s <- mkAssignment ass
+  s <- mkCube ass
   not_s <- z $ mkNot s
-  s' <- mkAssignment $ map next ass
+  s' <- mkCube $ map next ass
   -- TODO: use the substitution part of the trans relation
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
@@ -243,7 +243,7 @@ data Query = Q { queryContext :: AST
                , queryLits :: [Literal] }
  deriving ( Eq, Show, Ord )
 
-doQuery :: Query -> PDRZ3 (Result, Maybe Assignment)
+doQuery :: Query -> PDRZ3 (Result, Maybe Cube)
 doQuery q = do
   let bvs = queryBoolVars q
       ivs = queryIntVars q
@@ -279,7 +279,7 @@ evalBoolsAndInts m (as1,as2) = do
 
 
 -- Generalising an assignment which breaks the safety property in F_N
-generalise1 :: Assignment -> PDRZ3 Assignment
+generalise1 :: Cube -> PDRZ3 Cube
 generalise1 a = do
   --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   let a' = nub a
@@ -296,12 +296,12 @@ generalise1 a = do
 
 -- Generalising an assignment which breaks consecution of another property !s
 -- (!s a clause based on the previously found bad cube s)
-generalise2 :: Assignment -> TimedCube -> PDRZ3 Assignment
+generalise2 :: Cube -> TimedCube -> PDRZ3 Cube
 generalise2 a (TC ass k) = do
   --let vars = (map BV $ M.keys $ bvs a) ++ (map IV $ M.keys $ ivs a)
   f_kminus1 <- mkFrame (k-1)
-  s <- mkAssignment ass
-  s' <- mkAssignment $ next ass
+  s <- mkCube ass
+  s' <- mkCube $ next ass
   -- TODO: change the mkTransRelation to use the substitution technique for
   --  integer variables.
   trans_kminus1 <- mkTransRelation
@@ -320,7 +320,7 @@ generalise2 a (TC ass k) = do
   a' <- foldM (tryRemoveLiteral context consequent) a a
   return a'
 
-tryRemoveLiteral :: AST -> AST -> Assignment -> Literal -> PDRZ3 Assignment
+tryRemoveLiteral :: AST -> AST -> Cube -> Literal -> PDRZ3 Cube
 tryRemoveLiteral context consequent ass lit = do
    redundant <- shouldRemoveLiteral context consequent  ass lit
    --lg $ (show lit) ++ (if redundant then " is " else " is not ") ++ "redundant"
@@ -334,29 +334,31 @@ shouldRemoveLiteral context consequent cube lit = do
                 | l <- cube ]
   ast <- mkCube modCube
   -- Assert the modified assignment:
-  res <- zlocal $ do
-   assert ast
-   check
+  z push
+  z $ assert ast
+  res <- z check
   if (res==Unsat)
   -- The modified assignment is not even internally consistent
-  then return True
+  then do
+   z $ pop 1
+   return True
   else do
   -- Assert the context in which the original cube led to a bad outcome:
-  res <- zlocal $ do
-   assert context
-   assert ast
-   check
+  z push
+  z $ assert context
+  res <- z check
   if (res==Unsat)
   -- This literal is necessary for the assignment to function in the context
-  then return False
+  then do
+   z $ pop 2
+   return False
   else do
   -- Assert the context and the good outcome, which is unreachable under the
   -- original cube:
-  res <- zlocal $ do
-   assert context
-   assert consequent
-   assert ast
-   check  
+  z push
+  z $ assert consequent
+  res <- z check
+  z $ pop 3
   -- If it's still unreachable, then this literal is unecessary
   return (res==Unsat)
 
@@ -379,7 +381,7 @@ getMaxFrameIndex = get >>= (return . (+ (-1)) . length . frames)
 
 updateFrames :: TimedCube -> PDRZ3 ()
 updateFrames (TC s k) = do
-  let clause = invertAssignment s
+  let clause = invertCube s
   c <- get
   newFrames <- sequence $
    [ if (i > 0 && i <= k) then (addTo fr clause) else return fr
@@ -414,7 +416,7 @@ updateFrames (TC s k) = do
 
 
 
-data TimedCube = TC Assignment Int
+data TimedCube = TC Cube Int
  deriving ( Eq, Show )
 
 instance Ord TimedCube where
@@ -451,7 +453,6 @@ data Frame = Init Predicate | Frame (S.Set Clause)
 type Clause = [Literal]
 type Cube = [Literal]
 
-type Assignment = Cube
 
 
 ----
@@ -692,15 +693,10 @@ mkVariable (IV (IntVar v)) = z $ mkFreshIntVar (show v)
 
 
 
-mkAssignment :: Assignment -> PDRZ3 AST
-mkAssignment = mkCube . assignmentToCube
-
 -- TODO: change Cube and Clause to Sets instead of lists?
-assignmentToCube :: Assignment -> Cube
-assignmentToCube = id
 
-invertAssignment :: Assignment -> Clause
-invertAssignment = (map pnot) . assignmentToCube
+invertCube :: Cube -> Clause
+invertCube = (map pnot)
 
 
 mkClause :: Clause -> PDRZ3 AST
