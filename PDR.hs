@@ -31,6 +31,15 @@ type PDRZ3 = StateT SMTContext Z3
 z = lift
 zlocal = z . local
 
+pdrlocal :: PDRZ3 a -> PDRZ3 a
+pdrlocal m = do
+ z push
+ res <- m
+ z $ pop 1
+ return res
+
+---- MAIN FUNCTIONS
+
 runPdr :: System -> IO Bool
 runPdr s = do
   (res, finalState) <- evalZ3 $ runStateT (pdr s) (emptyContext)
@@ -68,6 +77,8 @@ outerPdrLoop i s = do
   else do
   outerPdrLoop (i+1) s
 
+
+---- BLOCKING FUNCTIONS
 
 -- Input i :: Int is a DEBUG parameter, to force termination when it would
 --  otherwise run forever. To be removed as soon as the underlying issue is
@@ -146,11 +157,13 @@ blockBadState (TC s k) = do
   return True
 
 
+---- FORWARD PROPAGATION FUNCTIONS
 
 -- Returns: true if property is proven (inductive invariant found),
 --   false if another iteration is needed
 forwardPropagation :: PDRZ3 Bool
 forwardPropagation = do
+  computeNewInterestingLiterals
   addNewFrame
   n <- getMaxFrameIndex
   lg $ "Entered forward propagation, n=" ++ (show n)
@@ -188,6 +201,54 @@ tryForwardProp k clause = do
    check
   return (res == Unsat)
 
+addNewFrame :: PDRZ3 ()
+addNewFrame = do
+  c <- get
+  put $ c {frames = (frames c) +++ emptyFrame}
+  return ()
+
+updateFrames :: TimedCube -> PDRZ3 ()
+updateFrames (TC s k) = do
+  let clause = invertCube s
+  c <- get
+  newFrames <- sequence $
+   [ if (i > 0 && i <= k) then (addTo fr clause) else return fr
+   | (fr,i) <- zip (frames c) [0..]
+   ]
+  c <- get
+  put $ c {frames = newFrames}
+  lg $ "Updated frames: added "++ show clause++" to frames 1—"++show k
+  --lg $ show newFrames
+ where addTo (Init p) cl = return (Init p)
+       addTo (Frame cls) cl = do
+        lg $ "Checking subsumption when adding "++(show cl)++" to "++(show cls)
+        cl_ast <- mkClause cl
+        new_cls <- pdrlocal $ do
+         z $ assert cl_ast
+         foldM trySubsume [] (S.toList cls)
+        return $ Frame (S.fromList $ cl : new_cls)
+       trySubsume acc cand = do
+        cand_ast <- mkClause cand
+        res <- zlocal $ do
+         assert =<< mkNot cand_ast
+         check
+        if (res==Sat)
+        -- This clause should not be removed by subsumption
+        then return $ cand : acc
+        else do
+        lg $ "Clause "++(show cand)++"removed by subsumption"
+        return acc
+
+computeNewInterestingLiterals :: PDRZ3 ()
+computeNewInterestingLiterals = do
+ return ()
+
+
+
+
+
+---- SMT QUERY FUNCTIONS
+-- Specifically, the two functions that handle queries "is there another bad state at this frame" and "can we reach this particular bad state through a 1-step transition"
 
 unsafeStateQuery :: PDRZ3 (Result, Maybe Cube)
 unsafeStateQuery = do
@@ -278,6 +339,8 @@ evalBoolsAndInts m (as1,as2) = do
 
 
 
+---- GENERALISATION FUNCTIONS
+
 -- Generalising an assignment which breaks the safety property in F_N
 generalise1 :: Cube -> PDRZ3 Cube
 generalise1 a = do
@@ -366,52 +429,6 @@ shouldRemoveLiteral context consequent cube lit = do
 
 
 
-addNewFrame :: PDRZ3 ()
-addNewFrame = do
-  c <- get
-  put $ c {frames = (frames c) +++ emptyFrame}
-  return ()
-
-emptyFrame :: Frame
-emptyFrame = Frame (S.empty)
-
-getMaxFrameIndex :: PDRZ3 Int
-getMaxFrameIndex = get >>= (return . (+ (-1)) . length . frames)
-
-
-updateFrames :: TimedCube -> PDRZ3 ()
-updateFrames (TC s k) = do
-  let clause = invertCube s
-  c <- get
-  newFrames <- sequence $
-   [ if (i > 0 && i <= k) then (addTo fr clause) else return fr
-   | (fr,i) <- zip (frames c) [0..]
-   ]
-  c <- get
-  put $ c {frames = newFrames}
-  lg $ "Updated frames: added "++ show clause++" to frames 1—"++show k
-  --lg $ show newFrames
- where addTo (Init p) cl = return (Init p)
-       addTo (Frame cls) cl = do
-        lg $ "Checking subsumption when adding "++(show cl)++" to "++(show cls)
-        cl_ast <- mkClause cl
-        z push
-        z $ assert cl_ast
-        new_cls <- foldM trySubsume [] (S.toList cls)
-        z $ pop 1
-        return $ Frame (S.fromList $ cl : new_cls)
-       trySubsume acc cand = do
-        z push
-        cand_ast <- mkClause cand
-        z $ assert =<< mkNot cand_ast
-        res <- z check
-        z $ pop 1
-        if (res==Sat)
-        -- This clause should not be removed by subsumption
-        then return $ cand : acc
-        else do
-        lg $ "Clause "++(show cand)++"removed by subsumption"
-        return acc
 
 
 
@@ -449,6 +466,14 @@ queueInsert tc = do
 -- Each clause is the negation of a (generalised) bad cube
 data Frame = Init Predicate | Frame (S.Set Clause)
  deriving ( Eq, Ord, Show )
+
+emptyFrame :: Frame
+emptyFrame = Frame (S.empty)
+
+getMaxFrameIndex :: PDRZ3 Int
+getMaxFrameIndex = get >>= (return . (+ (-1)) . length . frames)
+
+
 
 type Clause = [Literal]
 type Cube = [Literal]
