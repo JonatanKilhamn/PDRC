@@ -4,6 +4,7 @@ import Control.Applicative
 import Control.Monad
 import Data.Maybe
 import Data.List
+import Data.Ord
 import qualified Data.Traversable as T
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -40,12 +41,11 @@ pdrlocal m = do
 
 ---- MAIN FUNCTIONS
 
-runPdr :: System -> IO Bool
+runPdr :: System -> IO (Bool, SMTContext)
 runPdr s = do
   (res, finalState) <- evalZ3 $ runStateT (pdr s) (emptyContext)
-  putStr (pdrlog finalState)
-  --putStr $ show finalState -- use when log is too long
-  return res
+  --putStr (pdrlog finalState)
+  return (res, finalState)
 
 pdr :: System -> PDRZ3 Bool
 pdr s = do
@@ -94,6 +94,8 @@ blockAllBadStatesInLastFrame i = do
     lg "All bad states blocked – no more unsafe states found at this depth"
     return True
   else do
+  lg $ "Original bad cube: " ++ show (fromJust maybeCube)
+  lg $ "Sorted: " ++ show (sortInterestingLits (fromJust maybeCube))
   assignment <- generalise1 (fromJust maybeCube)
   lg $ "Generalised assignment: " ++ show assignment
   putQueue $ priorityQueue (TC assignment n)
@@ -115,7 +117,7 @@ blockAllBadStatesInLastFrame i = do
 -- Returns: true when entire queue is blocked; false if property is disproven
 blockEntireQueue :: Int -> PDRZ3 Bool
 blockEntireQueue i = do
-  queue <- fmap prioQueue get
+  queue <- prioQueue <$> get
   if (Q.null queue)
   then do
   lg "Queue is empty, finished blocking step"
@@ -218,10 +220,10 @@ updateFrames (TC s k) = do
   c <- get
   put $ c {frames = newFrames}
   lg $ "Updated frames: added "++ show clause++" to frames 1—"++show k
-  --lg $ show newFrames
+  lg $ show newFrames
  where addTo (Init p) cl = return (Init p)
        addTo (Frame cls) cl = do
-        lg $ "Checking subsumption when adding "++(show cl)++" to "++(show cls)
+        --lg $ "Checking subsumption when adding "++(show cl)++" to "++(show cls)
         cl_ast <- mkClause cl
         new_cls <- pdrlocal $ do
          z $ assert cl_ast
@@ -241,8 +243,25 @@ updateFrames (TC s k) = do
 
 computeNewInterestingLiterals :: PDRZ3 ()
 computeNewInterestingLiterals = do
+ ils <- (S.toList . interestingLits) <$> get
+ updateSets <- (getUpdateSets . system) <$> get
+ let newLits = allNewLits ils updateSets
+ lg "Generating new interesting literals:"
+ lg $ show newLits
+ mapM addInterestingLiteral (map simplifyIntLit newLits)
  return ()
-
+  where
+   allNewLits ils udss = 
+    [ foldl updateLiteral l uds
+    | l <- ils
+    , uds <- udss
+    ]
+   updateLiteral l@(BLit _ _) _ = l
+   updateLiteral l@(ILit bp e1 e2) ud = ILit bp (updateIE e1 ud) (updateIE e2 ud)
+   updateIE (IEVar v1) (v2,e2) | (v1 == v2) = e2
+   updateIE (IEPlus e1 e2) ud = IEPlus (updateIE e1 ud) (updateIE e2 ud)
+   updateIE (IEMinus e1 e2) ud = IEMinus (updateIE e1 ud) (updateIE e2 ud)
+   updateIE e _ = e
 
 
 
@@ -260,7 +279,7 @@ unsafeStateQuery = do
                        , f_n ]
   -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
-  lits <- fmap (S.toList . interestingLits) get
+  lits <- (S.toList . interestingLits) <$> get
   -- Query:
   (res, maybeAss) <- doQuery $
     Q { queryBoolVars = bvs
@@ -279,7 +298,6 @@ consecutionQuery (TC ass k) = do
   s <- mkCube ass
   not_s <- z $ mkNot s
   s' <- mkCube $ map next ass
-  -- TODO: use the substitution part of the trans relation
   t <- mkTransRelation
   f_kminus1 <- mkFrame (k-1)
   context <- z $ mkAnd [ not_s
@@ -288,7 +306,8 @@ consecutionQuery (TC ass k) = do
                        , t ]
   -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
-  lits <- fmap (S.toList . interestingLits) get
+  litsUnsorted <- (S.toList . interestingLits) <$> get
+  let lits = litsUnsorted --sortInterestingLits litsUnsorted
   -- Query:
   (res, maybeAss) <- doQuery $
     Q { queryBoolVars = bvs
@@ -327,8 +346,9 @@ doQuery q = do
                                   | (bv, Just b) <- zip bvs maybeBools ] ++
                                   [ ILit Equals (IEVar iv) (IEConst i)
                                   | (iv, Just i) <- zip ivs maybeInts ] ++
-                                  [ (if b then id else pnot) lit
-                                  | (lit, Just b) <- zip lits maybeLits ]
+                                  (sortInterestingLits $
+                                   [ (if b then id else pnot) lit
+                                   | (lit, Just b) <- zip lits maybeLits ] )
   return (res, maybeAss)
 
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
@@ -456,7 +476,7 @@ popMin = do
 
 queueInsert :: TimedCube -> PDRZ3 ()
 queueInsert tc = do
-  queue <- fmap prioQueue get
+  queue <- prioQueue <$> get
   putQueue $ Q.insert tc queue
   return ()
   
@@ -517,7 +537,7 @@ instance Show SMTContext where
     ] ++
     [ "INTERESTING LITERALS:"] ++ indent
     [ show l
-    | l <- S.toList $ interestingLits c
+    | l <- sortInterestingLits $ S.toList $ interestingLits c
     ] ++    
     [ "VARIABLES:"] ++ indent
     [ show v
@@ -579,7 +599,7 @@ clauseToPredicate lits = POr (map P lits)
 
 mkPredicate :: Predicate -> PDRZ3 AST
 mkPredicate p = do
-  pm <- fmap predMap get
+  pm <- predMap <$> get
   let maybeAst = M.lookup p pm
   case maybeAst of (Just ast) -> do
                     return ast
@@ -603,7 +623,7 @@ mkPredicate' (PTop) = z $ mkTrue
 
 mkLiteral :: Literal -> PDRZ3 AST
 mkLiteral l = do
-  lm <- fmap litMap get
+  lm <- litMap <$> get
   let maybeAst = M.lookup l lm
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> do
@@ -622,7 +642,7 @@ mkLiteral' l@(ILit bp e1 e2) = do
  ast1 <- mkIntExpr e1
  ast2 <- mkIntExpr e2
  final_ast <- z $ (zfunction bp) ast1 ast2
- addInterestingLiteral l
+ addInterestingLiteral (simplifyIntLit l)
  return final_ast 
   where zfunction Equals = mkEq
         zfunction NEquals = curry ((mkNot =<<) . (uncurry mkEq))
@@ -664,9 +684,45 @@ addBreakPoint (ILit bp e1 e2) s = inequality && current && relevant
                   vs `S.isSubsetOf` S.fromList (map IV ivs)
 --}
 
+
+-- TODO: maybe change names ("interesting lits", "more constraining")
+-- TODO: see if moreConstraining can be rewritten to be more succinct!
+-- TODO: as a full generalisation, switch to recording breakpoints;
+--  evaluating each of these literals by math rather than by withModel
+sortInterestingLits :: [Literal] -> [Literal]
+sortInterestingLits ls = sortInterestingLits' ls
+ where sortInterestingLits' = reverse . (sortBy moreConstraining)
+
+moreConstraining :: Literal -> Literal -> Ordering
+moreConstraining (BLit _ _) _ = EQ
+moreConstraining _ (BLit _ _) = EQ
+moreConstraining (ILit Equals _ _) _ = GT
+moreConstraining _ (ILit Equals _ _) = LT
+moreConstraining (ILit LessThan _ (IEConst x)) (ILit LessThan _ (IEConst y)) = compare y x
+moreConstraining (ILit LessThanEq _ (IEConst x)) (ILit LessThan _ (IEConst y)) = compare y (x+1)
+moreConstraining (ILit LessThan _ (IEConst x)) (ILit LessThanEq _ (IEConst y)) = compare (y+1) x
+moreConstraining (ILit LessThanEq _ (IEConst x)) (ILit LessThanEq _ (IEConst y)) = compare y x
+moreConstraining (ILit GreaterThan _ (IEConst x)) (ILit GreaterThan _ (IEConst y)) = compare x y
+moreConstraining (ILit GreaterThanEq _ (IEConst x)) (ILit GreaterThan _ (IEConst y)) = compare (x-1) y
+moreConstraining (ILit GreaterThan _ (IEConst x)) (ILit GreaterThanEq _ (IEConst y)) = compare x (y-1)
+moreConstraining (ILit GreaterThanEq _ (IEConst x)) (ILit GreaterThanEq _ (IEConst y)) = compare x y
+moreConstraining (ILit LessThan _ _) (ILit GreaterThan _ _) = LT
+moreConstraining (ILit LessThanEq _ _) (ILit GreaterThan _ _) = LT
+moreConstraining (ILit LessThan _ _) (ILit GreaterThanEq _ _) = LT
+moreConstraining (ILit LessThanEq _ _) (ILit GreaterThanEq _ _) = LT
+moreConstraining (ILit GreaterThan  _ _) (ILit LessThan _ _) = GT
+moreConstraining (ILit GreaterThan  _ _) (ILit LessThanEq _ _) = GT
+moreConstraining (ILit GreaterThanEq  _ _) (ILit LessThan _ _) = GT
+moreConstraining (ILit GreaterThanEq  _ _) (ILit LessThanEq _ _) = GT
+moreConstraining _ _ = EQ
+
+
+
+
+
 mkIntExpr :: IntExpr -> PDRZ3 AST
 mkIntExpr ie = do
-  iem <- fmap intExprMap get
+  iem <- intExprMap <$> get
   let maybeAst = M.lookup ie iem
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> do
@@ -686,7 +742,7 @@ mkIntExpr' (IEVar v) = mkIntVariable v
 
 mkBoolVariable :: BoolVariable -> PDRZ3 AST
 mkBoolVariable v = do
-  vm <- fmap varMap get
+  vm <- varMap <$> get
   let maybeAst = M.lookup (BV v) vm
   case maybeAst of (Just a) -> return a
                    (Nothing) -> do
@@ -700,7 +756,7 @@ mkBoolVariable v = do
 
 mkIntVariable :: IntVariable -> PDRZ3 AST
 mkIntVariable v = do
-  vm <- fmap varMap get
+  vm <- varMap <$> get
   let maybeAst = M.lookup (IV v) vm
   case maybeAst of (Just ast) -> return ast
                    (Nothing) -> do
@@ -737,7 +793,7 @@ mkCube = mkPredicate . PAnd . (map P)
 
 mkTransRelation :: PDRZ3 AST
 mkTransRelation = do
-  trs <- fmap (trans . system) get
+  trs <- (trans . system) <$> get
   let trans_pred = PAnd (map POr (map (map transRelationToPred) trs))
   mkPredicate trans_pred
  where transRelationToPred tr =

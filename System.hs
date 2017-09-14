@@ -158,6 +158,12 @@ instance Negatable BinaryPred where
  pnot GreaterThan = LessThanEq
  pnot GreaterThanEq = LessThan
 
+flipbp :: BinaryPred -> BinaryPred
+flipbp LessThan = GreaterThan
+flipbp LessThanEq = GreaterThanEq
+flipbp GreaterThan = LessThan
+flipbp GreaterThanEq = LessThanEq
+flipbp bp = bp
 
 updateKeys :: (Ord k, Ord k2) => M.Map k v -> (k -> k2) -> M.Map k2 v
 updateKeys m fun = M.fromList $ map (mapFst fun) $ M.toList m
@@ -272,6 +278,20 @@ isSat s = and [(length $ intVars s) == 0
 
 
 
+getUpdateSets :: System -> [[(IntVariable, IntExpr)]]
+getUpdateSets s = concat $ map (map intUpdates) (trans s)
+
+
+
+simplifyIntLit :: Literal -> Literal
+simplifyIntLit (ILit bp e (IEConst c)) =
+  case e of (IEPlus (IEConst c2) e2) -> simplifyIntLit $ ILit bp e2 (IEConst (c+c2))
+            (IEPlus e2 (IEConst c2)) -> simplifyIntLit $ ILit bp e2 (IEConst (c+c2))
+            (IEMinus e2 (IEConst c2)) -> simplifyIntLit $ ILit bp e2 (IEConst (c-c2))
+            (IEMinus (IEConst c2) e2) -> simplifyIntLit $ ILit (flipbp bp) e2 (IEConst (c2-c))
+            _ -> (ILit bp e (IEConst c))
+simplifyIntLit (ILit bp (IEConst c) e) = simplifyIntLit $ ILit bp e (IEConst c)
+simplifyIntLit l = l
 
 
 
