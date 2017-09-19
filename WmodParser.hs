@@ -6,6 +6,7 @@ import qualified Data.Set as S
 import Control.Monad
 import Data.List
 import Data.Maybe
+import qualified Data.Map as M
 
 import Automata
 import System
@@ -40,6 +41,7 @@ getElem _        = Nothing
 
 getElemName :: Element -> String
 getElemName = qName . elName
+
 
 
 parseWmodXml :: [Content] -> Maybe Synchronisation
@@ -97,8 +99,8 @@ parseAutomaton e
               , marked = acceptingPredicates
               , initialLocation = initLoc -- :: Location
               , uncontrollable = S.empty
-              , intDomains = undefined
-              , boolInits = undefined
+              , intDomains = M.empty
+              , boolInits = M.empty
               }
 
 parseLocations :: Element -> Maybe (S.Set Location, Location)
@@ -272,8 +274,6 @@ toIntExpr (BO OpMinus e1 e2) = liftM2 IEMinus (toIntExpr e1) (toIntExpr e2)
 toIntExpr _ = Nothing
 
 
--- setDomain :: (IntVariable, Domain) -> Synchronisation -> Synchronisation
-
 setVarInitAndRange :: Synchronisation -> Element -> Maybe Synchronisation
 setVarInitAndRange s e
  | getElemName e /= "VariableComponent" = Nothing
@@ -300,11 +300,18 @@ setVarInitAndRange s e
                 (Const i) -> Just i
                 (_) -> Nothing
    let var = IntVar (Var name)
-   return $ setDefault (var, fromIntegral init) $
+   return $ setDomain ( var
+                      , Domain { lower = fromIntegral min
+                               , upper = fromIntegral max
+                               , initial = fromIntegral init }
+                      )
+                      s
+{--   
+   setDefault (var, fromIntegral init) $
              setRangeMin (var, fromIntegral min) $
               setRangeMax (var, fromIntegral max) s
 
-
+--}
 
 
 

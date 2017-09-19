@@ -100,12 +100,12 @@ instance Show Synchronisation where
     [ "AUT. No "++ (show i) ++ " " ++ (show a)
     | (a,i) <- zip (S.toList $ automata synch) [1..]
     ] ++
-    {--[ "ALL VARIABLES IN SYNCH: "
-    | not (null (allVars synch))
+    [ "ALL VARIABLES IN SYNCH: "
+    | not (M.null (synchDomains synch))
     ] ++
-    [ "  " ++ name ++ ": " ++ (show var)
-    | (name, var) <- M.assocs $ allVars synch
-    ] ++--}
+    [ "  " ++ (show iv) ++ ": " ++ (show dom)
+    | (iv, dom) <- M.assocs $ synchDomains synch
+    ] ++
     [ "ALL UNCONTROLLABLE EVENTS: "
     | not (null (getAllUncontrollable synch))
     ] ++ indent
