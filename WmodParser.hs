@@ -2,11 +2,13 @@ module WmodParser where
 
 import Text.XML.Light
 import System.IO
-import TransitionSystem
 import qualified Data.Set as S
 import Control.Monad
 import Data.List
 import Data.Maybe
+
+import Automata
+import System
 
 readWmodFile :: FilePath -> IO Synchronisation
 readWmodFile fp =
@@ -19,7 +21,7 @@ readWmodFile fp =
 
 main :: IO Synchronisation
 main = readWmodFile
-       "Examples/HVC2014/EDP5_10.wmod"
+       "examples/EDP5_10.wmod"
        --"Examples/simple_selfloop.wmod"
        --"Examples/cat_mouse.wmod"
 
@@ -66,6 +68,8 @@ parseWmodXml cs =
    return synch2
    
 
+
+
 parseAutomaton :: Element -> Maybe Automaton
 parseAutomaton e
  | getElemName e /= "SimpleComponent" = Nothing
@@ -89,10 +93,12 @@ parseAutomaton e
    
    return Aut { autName = aName
               , locations = locs
-              , transitions = transitions -- :: [Transition]
+              , transitions = transitions -- :: [AutTransition]
               , marked = acceptingPredicates
               , initialLocation = initLoc -- :: Location
-              , uncontrollable = []
+              , uncontrollable = S.empty
+              , intDomains = undefined
+              , boolInits = undefined
               }
 
 parseLocations :: Element -> Maybe (S.Set Location, Location)
@@ -105,16 +111,16 @@ parseLocations e
    initLoc <- findInXml isInitial (getAttribute "Name") nodes
    return (S.fromList locations, initLoc)
 
-parseAccepting :: Element -> Maybe [Predicate]
+parseAccepting :: Element -> Maybe [(Location, Predicate)]
 parseAccepting e
  | getElemName e /= "NodeList" = Nothing
  | otherwise =
   do
    let nodes = mapMaybe getElem $ filter (elemName "SimpleNode") (elContent e)
        acceptingNames = findAllInXml isAccepting (getAttribute "Name") nodes
-   return $ acceptingNames `zip` (repeat [])
+   return $ zip acceptingNames (repeat PTop)
 
-parseTransitions :: Element -> Maybe [Transition]
+parseTransitions :: Element -> Maybe [AutTransition]
 parseTransitions e
  | getElemName e /= "EdgeList" = Nothing
  | otherwise =
@@ -125,7 +131,7 @@ parseTransitions e
  where getTwoAttributes = flip $ double . (flip getAttribute)
 
 
-parseTransition :: Element -> Maybe [Transition]
+parseTransition :: Element -> Maybe [AutTransition]
 parseTransition e
  | getElemName e /= "Edge" = Nothing
  | otherwise =
@@ -156,17 +162,18 @@ parseTransition e
              (Just updateBlock) ->
               let updateExprElems = mapMaybe getElem (elContent updateBlock) in
               mapMaybe (exprToUpdate <=< parseExpr) updateExprElems
-   
-   
-   return [ Trans { start = from
-                  , event = name
-                  , guards = gs
-                  , updates = uds
-                  , end = to
-                  --, uncontrollable = False
-                  }
+   let form = TR { System.guard = PAnd gs
+                 , nextRelation = PTop
+                 , intUpdates = uds
+                 , nextGuard = PTop
+                 }
+   return [ AT { start = from
+               , end = to
+               , event = name
+               , formula = form
+               --, uncontrollable = False
+               }
           | name <- names ]
-
 
 
 double :: (a -> Maybe b) -> (a,a) -> Maybe (b,b)
@@ -226,41 +233,46 @@ flattenContent = foldr expandAndAdd []
   expandAndAdd _        rest = rest
 
 
-exprToGuard :: Expr -> Maybe Guard
+exprToGuard :: Expr -> Maybe Predicate
 exprToGuard (UO OpNot e1) = do
- g1 <- exprToGuard e1
- return $ GNot g1
+ p1 <- exprToGuard e1
+ return $ pnot p1
 exprToGuard (BO OpAnd e1 e2) = do
- g1 <- exprToGuard e1
- g2 <- exprToGuard e2
- return $ GAnd [g1, g2]
+ p1 <- exprToGuard e1
+ p2 <- exprToGuard e2
+ return $ PAnd [p1, p2]
 exprToGuard (BO OpOr e1 e2) = do
- g1 <- exprToGuard e1
- g2 <- exprToGuard e2
- return $ GOr [g1, g2]
-exprToGuard (BO op (Var x) e) =
- liftM2 (\ie -> \p -> GInt p x ie) (toIntExpr e) (toPred op)
+ p1 <- exprToGuard e1
+ p2 <- exprToGuard e2
+ return $ POr [p1, p2]
+exprToGuard (BO op (VName x) e) = do
+ ie <- toIntExpr e
+ bp <- toPred op
+ return $ P $ ILit bp (IEVar (IntVar (Var x))) ie
 exprToGuard _ = Nothing
 
 
-exprToUpdate :: Expr -> Maybe Update
-exprToUpdate (BO OpAssign (Var x) e) =
- liftM (AssignInt x) (toIntExpr e)
-exprToUpdate (BO OpIncr (Var x) e) =
- liftM (AssignInt x) (liftM (Plus (IntVar x)) (toIntExpr e))
-exprToUpdate (BO OpDecr (Var x) e) =
- liftM (AssignInt x) (liftM (Minus (IntVar x)) (toIntExpr e))
+exprToUpdate :: Expr -> Maybe (IntVariable, IntExpr)
+exprToUpdate (BO OpAssign (VName x) e) =
+ liftM2 (,) (return v) (toIntExpr e)
+  where v = IntVar (Var x)
+exprToUpdate (BO OpIncr (VName x) e) =
+ liftM2 (,) (return v) (liftM (IEPlus (IEVar v)) (toIntExpr e))
+  where v = IntVar (Var x)
+exprToUpdate (BO OpDecr (VName x) e) =
+ liftM2 (,) (return v) (liftM (IEMinus (IEVar v)) (toIntExpr e))
+  where v = IntVar (Var x)
 exprToUpdate _ = Nothing
 
 toIntExpr :: Expr -> Maybe IntExpr
-toIntExpr (Const n) = return $ IntConst n
-toIntExpr (Var x) = return $ IntVar x
-toIntExpr (BO OpPlus e1 e2) = liftM2 Plus (toIntExpr e1) (toIntExpr e2)
-toIntExpr (BO OpMinus e1 e2) = liftM2 Minus (toIntExpr e1) (toIntExpr e2)
+toIntExpr (Const n) = return $ IEConst (fromIntegral n)
+toIntExpr (VName x) = return $ IEVar (IntVar (Var x))
+toIntExpr (BO OpPlus e1 e2) = liftM2 IEPlus (toIntExpr e1) (toIntExpr e2)
+toIntExpr (BO OpMinus e1 e2) = liftM2 IEMinus (toIntExpr e1) (toIntExpr e2)
 toIntExpr _ = Nothing
 
 
-
+-- setDomain :: (IntVariable, Domain) -> Synchronisation -> Synchronisation
 
 setVarInitAndRange :: Synchronisation -> Element -> Maybe Synchronisation
 setVarInitAndRange s e
@@ -287,9 +299,10 @@ setVarInitAndRange s e
    init <- case (initExpr) of
                 (Const i) -> Just i
                 (_) -> Nothing
-   return $ setDefault (name,init) $
-             setRangeMin (name,min) $
-              setRangeMax (name,max) s
+   let var = IntVar (Var name)
+   return $ setDefault (var, fromIntegral init) $
+             setRangeMin (var, fromIntegral min) $
+              setRangeMax (var, fromIntegral max) s
 
 
 
@@ -315,7 +328,7 @@ parseExpr e
    let args = mapMaybe getElem (elContent e)
    enumNames <- mapM parseExpr args
    case (enumNames) of
-        [Var "on", Var "off"] -> return $ BO OpRange (Const 0) (Const 1)
+        [VName "on", VName "off"] -> return $ BO OpRange (Const 0) (Const 1)
         _ -> Nothing
 
  | getElemName e == "UnaryExpression" =
@@ -327,7 +340,7 @@ parseExpr e
  | getElemName e == "SimpleIdentifier" =
   do
    var <- getAttribute "Name" e
-   return $ Var var
+   return $ VName var
  | getElemName e == "IntConstant" =
   do
    val <- getAttribute "Value" e
@@ -337,7 +350,7 @@ parseExpr e
 
 data Expr
   = Const Int
-  | Var VarName
+  | VName VarName
   | BO BinaryOp Expr Expr
   | UO UnaryOp Expr
   deriving ( Show )
