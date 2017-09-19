@@ -43,7 +43,7 @@ main =
  do
   sc <- philSynch
   let system = synchToSystem sc
-  --writeCircuit ("Examples/phils"++ (show nbrPhils) ++ "_"++ (show nbrSteps)) circ
+  -- TODO: add safety property
   --return circ
   return system
 

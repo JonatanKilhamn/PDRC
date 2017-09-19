@@ -306,13 +306,6 @@ setVarInitAndRange s e
                                , initial = fromIntegral init }
                       )
                       s
-{--   
-   setDefault (var, fromIntegral init) $
-             setRangeMin (var, fromIntegral min) $
-              setRangeMax (var, fromIntegral max) s
-
---}
-
 
 
 ------------------
