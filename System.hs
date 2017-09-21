@@ -195,6 +195,12 @@ getAllVars :: System -> ([BoolVariable],[IntVariable])
 getAllVars s = ( Set.toList (boolVars s)
                , Set.toList (intVars s)
                )
+getAuxVars :: System -> ([BoolVariable],[IntVariable])
+getAuxVars s = ( [ bv
+                 | (BV bv) <- Set.toList $ auxVars s ]
+               , [ iv
+                 | (IV iv) <- Set.toList $ auxVars s ]
+               )
 
 
 data TransitionRelation

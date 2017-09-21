@@ -22,9 +22,9 @@ debug :: Bool
 debug = False
 
 debug_iter_bABSILF, debug_iter_oPL, debug_iter_bEQ :: Int
-debug_iter_bABSILF = 5
-debug_iter_oPL = 5
-debug_iter_bEQ = 10
+debug_iter_bABSILF = 1
+debug_iter_oPL = 1
+debug_iter_bEQ = 15
 
 
 type PDRZ3 = StateT SMTContext Z3
@@ -52,7 +52,7 @@ pdr s = do
   putInitialSmtContext s
   res <- outerPdrLoop 0 s
   c <- get
-  lg (show c)
+  --lg (show c)
   return res
 
 
@@ -67,7 +67,9 @@ outerPdrLoop i s = do
   else do
   success <- forwardPropagation
   if success
-  then return True
+  then do
+    lg "Successfully proved property!"
+    return True
   else do
   if (debug && i>=debug_iter_oPL)
   then do
@@ -86,7 +88,6 @@ outerPdrLoop i s = do
 -- Returns: false if property is disproved, true if all states could be blocked
 blockAllBadStatesInLastFrame :: Int -> PDRZ3 Bool
 blockAllBadStatesInLastFrame i = do
-  let setup = undefined -- some setup surely needed
   n <- getMaxFrameIndex
   (res, maybeCube) <- unsafeStateQuery
   if (res == Unsat) -- There is no unsafe state in F_n
@@ -156,6 +157,7 @@ blockBadState (TC s k) = do
     updateFrames (TC s k)
     n <- getMaxFrameIndex
     when (k < n) (queueInsert (TC s (k+1)))
+    return ()
   return True
 
 
@@ -246,8 +248,8 @@ computeNewInterestingLiterals = do
  ils <- (S.toList . interestingLits) <$> get
  updateSets <- (getUpdateSets . system) <$> get
  let newLits = allNewLits ils updateSets
- lg "Generating new interesting literals:"
- lg $ show newLits
+ --lg "Generating new interesting literals:"
+ --lg $ show newLits
  mapM addInterestingLiteral (map simplifyIntLit newLits)
  return ()
   where
@@ -281,9 +283,11 @@ unsafeStateQuery = do
   let (bvs, ivs) = getAllVars (system c)
   lits <- (S.toList . interestingLits) <$> get
   -- Query:
-  (res, maybeAss) <- doQuery $
+  (res, maybeAss, _) <- doQuery $
     Q { queryBoolVars = bvs
       , queryIntVars = ivs
+      , queryAuxBoolVars = []
+      , queryAuxIntVars = []
       , queryLits = lits
       , queryContext = context }
   --lg $ show maybeAss
@@ -292,7 +296,7 @@ unsafeStateQuery = do
 
 consecutionQuery :: TimedCube -> PDRZ3 (Result, Maybe Cube)
 consecutionQuery (TC ass k) = do
-  --lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
+  lg $ "Consecution query: " ++ (show $ next ass) ++ " at " ++ (show k)
   c <- get
   -- Context:
   s <- mkCube ass
@@ -306,30 +310,40 @@ consecutionQuery (TC ass k) = do
                        , t ]
   -- Variables and lits to extract from query:
   let (bvs, ivs) = getAllVars (system c)
+  let (aux_bvs,aux_ivs) = getAuxVars (system c)
   litsUnsorted <- (S.toList . interestingLits) <$> get
   let lits = litsUnsorted --sortInterestingLits litsUnsorted
   -- Query:
-  (res, maybeAss) <- doQuery $
+  (res, maybeAss, maybeAuxAss) <- doQuery $
     Q { queryBoolVars = bvs
       , queryIntVars = ivs
+      , queryAuxBoolVars = aux_bvs
+      , queryAuxIntVars = aux_ivs
       , queryLits = lits
       , queryContext = context }
-  --lg $ show maybeAss
+  lg $ "Original predecessor cube:"
+  lg $ show maybeAss ++ show maybeAuxAss
   return (res, maybeAss)
 
 data Query = Q { queryContext :: AST
                , queryBoolVars :: [BoolVariable]
                , queryIntVars :: [IntVariable]
+               , queryAuxBoolVars :: [BoolVariable]
+               , queryAuxIntVars :: [IntVariable]
                , queryLits :: [Literal] }
  deriving ( Eq, Show, Ord )
 
-doQuery :: Query -> PDRZ3 (Result, Maybe Cube)
+doQuery :: Query -> PDRZ3 (Result, Maybe Cube, Maybe Cube)
 doQuery q = do
   let bvs = queryBoolVars q
       ivs = queryIntVars q
+      aux_bvs = queryAuxBoolVars q
+      aux_ivs = queryAuxIntVars q
       lits = queryLits q
   bv_asts <- mapM mkBoolVariable $ bvs
   iv_asts <- mapM mkIntVariable $ ivs
+  aux_bv_asts <- mapM mkBoolVariable $ aux_bvs
+  aux_iv_asts <- mapM mkIntVariable $ aux_ivs
   lit_asts <- mapM mkLiteral $ lits
   -- Assertions and actual SAT check:
   (res, maybeVals) <- zlocal $ do
@@ -338,10 +352,12 @@ doQuery q = do
       maybeBools <- mapM (evalBool m) bv_asts
       maybeInts <- mapM (evalInt m) iv_asts
       maybeLits <- mapM (evalBool m) lit_asts
-      return (maybeBools, maybeInts, maybeLits)
+      maybeAuxBools <- mapM (evalBool m) aux_bv_asts
+      maybeAuxInts <- mapM (evalInt m) aux_iv_asts
+      return (maybeBools, maybeInts, maybeLits, maybeAuxBools, maybeAuxInts)
   let maybeAss =
        case maybeVals of (Nothing) -> Nothing
-                         (Just (maybeBools, maybeInts, maybeLits)) ->
+                         (Just (maybeBools, maybeInts, maybeLits,_,_)) ->
                            Just $ [ BLit bv b
                                   | (bv, Just b) <- zip bvs maybeBools ] ++
                                   [ ILit Equals (IEVar iv) (IEConst i)
@@ -349,7 +365,14 @@ doQuery q = do
                                   (sortInterestingLits $
                                    [ (if b then id else pnot) lit
                                    | (lit, Just b) <- zip lits maybeLits ] )
-  return (res, maybeAss)
+  let maybeAuxAss =
+       case maybeVals of (Nothing) -> Nothing
+                         (Just (_,_,_,maybeAuxBools, maybeAuxInts)) ->
+                           Just $ [ BLit bv b
+                                  | (bv, Just b) <- zip aux_bvs maybeAuxBools ] ++
+                                  [ ILit Equals (IEVar iv) (IEConst i)
+                                  | (iv, Just i) <- zip aux_ivs maybeAuxInts ]
+  return (res, maybeAss, maybeAuxAss)
 
 evalBoolsAndInts :: Model -> ([AST],[AST]) -> Z3 ([Maybe Bool],[Maybe Integer])
 evalBoolsAndInts m (as1,as2) = do

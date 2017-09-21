@@ -9,7 +9,7 @@ import qualified Data.Set as S
 
 -- Dining philosophers
 
-
+import PDR
 
 
 
@@ -42,7 +42,13 @@ main :: IO System
 main = 
  do
   sc <- philSynch
-  let system = synchToSystem sc
+  let sc_prop =
+       sc { synchSafety =
+         POr [ P $ ILit LessThan (IEVar $ IntVar $ Var "p1") (IEConst 5)
+--             , P $ ILit GreaterThan (IEVar $ acounter) (IEConst 13)
+             ]
+          }
+  let system = synchToSystem sc_prop
   -- TODO: add safety property
   --return circ
   return system

@@ -247,8 +247,9 @@ synchToSystem synch =
    , auxVars = S.unions [ S.map IV updatedByTrackers
                         , S.singleton (IV eventVar) ]
    , trans = S.toList $
-      S.union (S.map makeTransRels (automata synch))
-              (S.map makeUpdateTransRels allVars)
+      S.unions [ (S.map makeTransRels (automata synch))
+               , (S.map makeUpdateTransRels allVars)
+               , (S.singleton [makeDomainTransRels])]
    , System.init = makeInit -- :: Predicate
    , safetyProp = (synchSafety synch)
    }
@@ -274,15 +275,20 @@ synchToSystem synch =
    -- A collection of transition relations corresponding to the actions
    -- available to one automaton
    makeTransRels aut =
-    (map (makeTransRel' aut) (transitions aut)) ++ (allowInvisible aut)
+    (map (makeTransRel' aut) (transitions aut)) ++ [allowInvisible aut]
    -- A "transition" added to each automaton to allow it to do nothing while
    -- another automaton executes local behaviour
-   allowInvisible aut = map invisibleEventTR (S.toList $ eventsNotIn aut)
-   invisibleEventTR ev = TR { guard = eventIs ev
-                            , nextRelation = PTop
-                            , intUpdates = []
-                            , nextGuard = PTop }
-   eventsNotIn aut = S.difference (allEvents synch) (events aut)
+   allowInvisible aut = TR { guard = makeNoAction aut
+                           , nextRelation = PTop
+                           , intUpdates = []
+                           , nextGuard = PTop }
+   makeNoAction aut =
+     PAnd $ [ POr [ pnot $ eventIs ev
+                  | ev <- S.toList $ events aut ]
+            ] ++
+            [ pnot $ ivIs (makeUpdatedByTracker v)
+                (setIndex aut (automata synch))
+            | v <- S.toList allVars ]
    -- The transition of an automaton, extended to include locations and events
    makeTransRel' aut at =
     (formula at) { guard =
@@ -331,6 +337,19 @@ synchToSystem synch =
                             (IV iv) -> [(iv,IEVar iv)]
                             _ -> []
         , nextGuard = PTop }
+   makeDomainTransRels =
+     TR { guard = PAnd (domainGuards ++ locDomainGuards)
+        , nextRelation = PTop
+        , intUpdates = []
+        , nextGuard = PTop }
+   domainGuards =
+     [ PAnd [ P $ ILit GreaterThanEq (IEVar iv) (IEConst $ lower d)
+            , P $ ILit LessThanEq (IEVar iv) (IEConst $ upper d) ]
+     | (iv,d) <- M.toList $ synchDomains synch ]
+   locDomainGuards =
+     [ PAnd [ P $ ILit GreaterThanEq (IEVar (makeLocVar aut)) (IEConst 0)
+            , P $ ILit LessThan (IEVar (makeLocVar aut)) (IEConst $ fromIntegral $ S.size $ locations aut) ]
+     | aut <- S.toList $ automata synch ]
    -- The initial state of the system
    makeInit = PAnd $ initLocs ++ 
                      initBoolVars ++

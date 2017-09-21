@@ -73,7 +73,7 @@ testAutA = Aut { autName = "Aut1"
   locA = "A1"
   locB = "A2"
   doms = M.fromList [ (acounter, Domain { initial = 0, lower=0,upper=100})
-                    --, (bcounter, Domain { initial = 0, lower=0,upper=100})
+                    , (bcounter, Domain { initial = 0, lower=0,upper=100})
                     ]
  
 acounter, bcounter :: IntVariable 
