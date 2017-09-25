@@ -249,7 +249,8 @@ synchToSystem synch =
    , trans = S.toList $
       S.unions [ (S.map makeTransRels (automata synch))
                , (S.map makeUpdateTransRels allVars)
-               , (S.singleton [makeDomainTransRels])]
+               --, (S.singleton [makeDomainTransRels])
+               ]
    , System.init = makeInit -- :: Predicate
    , safetyProp = (synchSafety synch)
    }
@@ -275,20 +276,20 @@ synchToSystem synch =
    -- A collection of transition relations corresponding to the actions
    -- available to one automaton
    makeTransRels aut =
-    (map (makeTransRel' aut) (transitions aut)) ++ [allowInvisible aut]
+    (map (makeTransRel' aut) (transitions aut)) ++ (allowInvisible aut)
    -- A "transition" added to each automaton to allow it to do nothing while
    -- another automaton executes local behaviour
-   allowInvisible aut = TR { guard = makeNoAction aut
-                           , nextRelation = PTop
-                           , intUpdates = []
-                           , nextGuard = PTop }
-   makeNoAction aut =
-     PAnd $ [ POr [ pnot $ eventIs ev
-                  | ev <- S.toList $ events aut ]
-            ] ++
-            [ pnot $ ivIs (makeUpdatedByTracker v)
-                (setIndex aut (automata synch))
-            | v <- S.toList allVars ]
+   allowInvisible aut = map (invisibleEventTR aut) (S.toList $ eventsNotIn aut)
+   invisibleEventTR aut ev =
+     TR { guard = PAnd $ (eventIs ev):(makeNoUpdates aut)
+        , nextRelation = PTop
+        , intUpdates = []
+        , nextGuard = PTop }
+   eventsNotIn aut = S.difference (allEvents synch) (events aut)
+   makeNoUpdates aut =
+     [ pnot $ ivIs (makeUpdatedByTracker v)
+         (setIndex aut (automata synch))
+     | v <- S.toList allVars ] 
    -- The transition of an automaton, extended to include locations and events
    makeTransRel' aut at =
     (formula at) { guard =
