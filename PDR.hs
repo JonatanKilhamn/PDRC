@@ -57,6 +57,7 @@ pdr s = do
 
 
 -- Input i :: Int is a DEBUG parameter, to force termination when it would
+--  otherwise run forever.
 outerPdrLoop :: Int -> System -> PDRZ3 Bool
 outerPdrLoop i s = do
   failed <- blockAllBadStatesInLastFrame 0
